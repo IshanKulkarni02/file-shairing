@@ -1,0 +1,20 @@
+{
+  "name": "lanshare",
+  "version": "1.0.0",
+  "description": "Password-protected LAN photo & video library. Browse, preview, upload and download from any device on your network.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node setup.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "archiver": "^6.0.2",
+    "busboy": "^1.6.0",
+    "express": "^4.21.2",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.33.5"
+  }
+}

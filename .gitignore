@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Generated at first run: contains the session secret and password hashes.
+config.json
+
+# The media library itself and the server's own cache/trash.
+library/
+.lanshare/
+
+# Packaged output and bundled binaries
+dist/
+build/
+bin/
+
+# TLS material, if you enable HTTPS
+*.pem
+*.key
+*.crt
+
+# OS and editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.log
+npm-debug.log*
