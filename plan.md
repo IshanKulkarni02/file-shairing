@@ -17,7 +17,7 @@ the internet without port forwarding.
 |---|---|---|
 | — | Web gallery, media pipeline, PWA, single-file exe | **Done** |
 | 0 | Repository workflow | **Done** (PRs pending `gh`, see below) |
-| A | Desktop control panel, accounts, permissions, sessions | All screens done; packaging (electron-builder) remaining |
+| A | Desktop control panel, accounts, permissions, sessions | **Done** |
 | B | Encrypted vaults | Not started |
 | C | Storage across drives | Not started |
 | D | Sync | Not started |
@@ -99,11 +99,23 @@ prove them. Current suites, all run against a live server:
 All 6 suites, 143 checks, pass together as of the desktop-screens merge.
 
 **Desktop app status:** Electron control panel with five working screens
-(Status, Accounts, Devices, Library, Settings), verified end to end against
-the running app — accounts created via the UI can sign in over the real HTTP
+(Status, Accounts, Devices, Library, Settings), packaged as a Windows
+installer (`npm run build:desktop` → NSIS, ~213 MB) via electron-builder.
+Verified end to end against both the dev app and the actual packaged
+win-unpacked build — accounts created via the UI sign in over the real HTTP
 API, revoking a session in Devices actually 401s that cookie, changing the
-port in Settings actually restarts the server. Not yet packaged as an
-installer (Task 15) or tested on macOS/Linux (Phase E).
+port in Settings actually restarts the server, and moving the library
+relocates it, survives the restart, and leaves the server fully working from
+the new location. Not yet tested on macOS/Linux (Phase E).
+
+**Testing note for future sessions:** in this environment, Windows UI
+Automation's accessibility tree can be unreliable against a freshly launched
+packaged (asar-loaded) renderer — it reported an almost-empty tree that looked
+like a rendering failure, while Chrome DevTools Protocol against the same
+process showed a fully populated, correct DOM with no errors. When verifying
+an Electron window here, prefer connecting over CDP
+(`--remote-debugging-port`) over UI Automation or screen capture, both of
+which have independently produced misleading results.
 
 ---
 
