@@ -1,0 +1,151 @@
+# LANShare — plan
+
+Living document. Updated as work lands, not left to rot.
+
+**What this is:** a personal storage network. Every machine — Windows, macOS,
+Linux — runs the same app and can act as both host and client. Photos and
+videos live on whichever machine you choose; any device browses them; some
+albums are encrypted at rest; storage spans internal, external and cloud-mounted
+drives; external drives sync when plugged in; and hosts reach each other over
+the internet without port forwarding.
+
+---
+
+## Status
+
+| Phase | What | State |
+|---|---|---|
+| — | Web gallery, media pipeline, PWA, single-file exe | **Done** |
+| 0 | Repository workflow | **In progress** |
+| A | Desktop control panel, accounts, permissions, sessions | Not started |
+| B | Encrypted vaults | Not started |
+| C | Storage across drives | Not started |
+| D | Sync | Not started |
+| E | macOS and Linux | Not started |
+| F | Client mode — connect to other hosts | Not started |
+| G | P2P over the internet | Not started |
+
+---
+
+## Working agreement
+
+### Branches
+
+```
+main          stable, releasable
+ └── dev      integration
+      └── feat/… | fix/… | chore/…    one per task, branched from dev
+```
+
+Every task:
+
+```bash
+git checkout dev && git pull        # sync first, always
+git checkout -b feat/short-name     # branch from dev
+# ... work, commit ...
+git push -u origin feat/short-name
+gh pr create --base dev --fill
+gh pr merge --squash --delete-branch
+```
+
+`main` only receives `dev` at a release point.
+
+**Claude does not ask before merging a PR into `dev`.** Agreed 2026-08-04.
+Merges into `main` are release decisions and are announced, not silent.
+
+### Files
+
+- `instruction.md` — your inbox. Entries are treated as prompts, acted on,
+  then deleted. Anything durable lands here in `plan.md` first.
+- `plan.md` — this file.
+
+### Testing
+
+Security boundaries get automated tests, because clicking through a UI does not
+prove them. Current suites, all run against a live server:
+
+| Suite | Covers |
+|---|---|
+| `test/smoke.mjs` | auth, path traversal, range requests, upload round-trip, albums, trash, zip |
+| `test/media.mjs` | thumbnails, metadata, HEVC detection, live transcoding |
+| `test/pwa.mjs` | HTTPS and every PWA install requirement |
+| `test/throughput.mjs` | 1 GB round trip with end-to-end checksum |
+
+---
+
+## Decisions and why
+
+Recorded so they are not relitigated or quietly reversed.
+
+| Decision | Reasoning |
+|---|---|
+| Default port **8420**, not 8080 | An AirPlay receiver holds 8080 on the Windows machine |
+| Both HTTP and HTTPS listeners | HTTP is fastest and simplest on a LAN; Chrome and Edge only offer PWA install over HTTPS |
+| Native `loading="lazy"` for thumbnails | An IntersectionObserver has a failure mode that leaves the entire grid blank; native lazy loading does not |
+| `requestTimeout = 0` | Node's 5-minute default silently truncates multi-gigabyte uploads |
+| Deletes go to trash, never unlink | A mistaken tap on a phone must be recoverable |
+| Safari gets original HEIC and HEVC | Apple devices decode both natively; converting would cost quality and CPU for nothing |
+| Everyone else gets transcoded HEVC | Chrome, Firefox and Android cannot decode it, and a black rectangle is not a video player |
+| Volume **GUID**, not drive letter | Letters and mount points change between plug-ins |
+| Google Drive via Drive for Desktop | It is already a mounted folder; direct API integration needs a Google Cloud project and OAuth consent for no real gain |
+| PBKDF2-HMAC-SHA512 for vault keys | scrypt is stronger, but WebCrypto has no scrypt and end-to-end vaults must derive the same key in a browser. One shared derivation beats the margin |
+| Vaults chunked at 1 MiB, AES-256-GCM | Whole-file encryption would break video seeking; chunking keeps range requests working |
+| Encrypted albums sync as ciphertext | Never decrypting to copy is what makes a lost drive or a cloud copy safe |
+| Two-way sync compares **three** states | Without a baseline snapshot, "deleted here" and "added there" are indistinguishable and deleted files come back |
+
+---
+
+## Open questions
+
+Decide before the phase that needs them.
+
+- **Phase E — macOS signing.** Shipping unsigned means Gatekeeper blocks the
+  DMG until opened via right-click → Open. Notarising needs an Apple Developer
+  account ($99/yr). Apple policy; no code can work around it.
+- **Phase G — P2P infrastructure.** NAT traversal cannot bootstrap from
+  nothing. Either run a small rendezvous server plus a TURN relay on a cheap
+  VPS, or install Tailscale on each machine and skip the phase entirely with
+  no code at all. Worth deciding before the work starts, not after.
+
+---
+
+## Phases
+
+Detail lives in the approved plan; summarised here so this file stands alone.
+
+**0 — Workflow.** Branches, `plan.md`, `instruction.md`, GitHub CLI so PRs can
+be opened and merged.
+
+**A — Desktop control panel.** Electron app owning the server. Accounts with
+cumulative roles (viewer → contributor → manager → admin) and per-account album
+restrictions; revocable sessions with a device list; library location and move;
+settings including close-to-tray and start-on-login. Also removes the current
+~10 s startup, since ffmpeg stops being Brotli-packed.
+
+*Migration risk:* an existing `config.json` user has no role and must default to
+admin, or first launch locks you out of your own library.
+
+**B — Encrypted vaults.** Per-album, two kinds. *Server-unlock* keeps
+thumbnails, previews and streaming working. *End-to-end* means the server only
+ever holds ciphertext and those albums are download-only — inherent, not a gap.
+Envelope encryption with a per-vault master key wrapped once per passphrase,
+which is what makes key sharing work without re-encrypting. Sharing a key
+cannot be undone.
+
+**C — Storage across drives.** The library becomes a set of locations; the
+gallery merges albums across them so browsing is unchanged.
+
+**D — Sync.** Per target: albums, direction, conflict policy (keep both /
+newest wins / mirror), and whether to run on connect. Target deletions go to
+trash there. Dry run and log every time.
+
+**E — macOS and Linux.** Autostart, volume detection, tray and packaging differ
+per platform; the rest is shared.
+
+**F — Client mode.** Connect to other hosts, browse their libraries, copy
+between any two. mDNS on the LAN, pairing code elsewhere. Credentials in the OS
+keychain.
+
+**G — P2P.** Rendezvous server for introductions, direct WebRTC where possible,
+TURN relay when NAT refuses. End-to-end encrypted regardless of path, so relay
+and rendezvous see ciphertext only.
