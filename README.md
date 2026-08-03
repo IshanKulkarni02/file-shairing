@@ -205,6 +205,8 @@ node test/smoke.mjs <password>
   Run `npm run samples` first to generate the fixtures.
 - `test/pwa.mjs` — HTTPS, and every requirement a browser checks before it
   offers to install the app.
+- `test/throughput.mjs` — a 1 GB round trip with an end-to-end checksum. This
+  is what would catch a regression of the upload timeout fix.
 
 ---
 
