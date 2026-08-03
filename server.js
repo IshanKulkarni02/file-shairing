@@ -8,6 +8,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
+const https = require('https');
 const sharp = require('sharp');
 
 const configLib = require('./lib/config');
@@ -16,11 +17,14 @@ const P = require('./lib/paths');
 const thumbs = require('./lib/thumbs');
 const ffmpeg = require('./lib/ffmpeg');
 const net = require('./lib/net');
+const tls = require('./lib/tls');
 
 const { config, generated } = configLib.loadOrCreate();
 const LIBRARY = path.resolve(config.library);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const HTTP_PORT = Number(process.env.PORT || config.port || 8080);
+const HTTP_PORT = Number(process.env.PORT || config.port || 8420);
+// Set httpsPort to 0 in config.json to turn the secure listener off entirely.
+const HTTPS_PORT = Number(process.env.HTTPS_PORT ?? config.httpsPort ?? 8443);
 
 // 4 MB reads keep a gigabit link busy without holding much memory per client.
 const READ_CHUNK = 4 * 1024 * 1024;
@@ -650,6 +654,31 @@ function tuneServer(server) {
   return server;
 }
 
+/**
+ * Bring up the HTTPS listener. Chrome and Edge only offer to install a PWA,
+ * and only allow a service worker, in a secure context — so this is what
+ * makes the app installable on Android and desktop. Failure here is never
+ * fatal: the HTTP listener is the one that matters.
+ */
+async function startHttps() {
+  if (HTTPS_PORT === 0) return null;
+
+  const credentials = await tls.ensureCertificate(LIBRARY);
+  if (!credentials) return null;
+
+  const server = tuneServer(https.createServer(
+    { key: credentials.key, cert: credentials.cert },
+    app,
+  ));
+
+  server.on('error', (err) => {
+    console.warn(`[https] disabled: ${err.message}`);
+  });
+
+  server.listen(HTTPS_PORT, '0.0.0.0');
+  return server;
+}
+
 function start() {
   const httpServer = tuneServer(http.createServer(app));
 
@@ -662,7 +691,11 @@ function start() {
     throw err;
   });
 
-  httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
+  httpServer.listen(HTTP_PORT, '0.0.0.0', async () => {
+    // Generating a key pair takes a moment on first run; the HTTP listener is
+    // already accepting connections by then.
+    const secure = await startHttps();
+
     if (generated) {
       console.log('\n  First run - an account was created for you:');
       console.log('    username:  admin');
@@ -671,7 +704,7 @@ function start() {
     }
     net.printBanner({
       httpPort: HTTP_PORT,
-      httpsPort: null,
+      httpsPort: secure ? HTTPS_PORT : null,
       library: LIBRARY,
       ffmpegReady: ffmpeg.tools().available,
     });
