@@ -17,7 +17,7 @@ the internet without port forwarding.
 |---|---|---|
 | — | Web gallery, media pipeline, PWA, single-file exe | **Done** |
 | 0 | Repository workflow | **Done** (PRs pending `gh`, see below) |
-| A | Desktop control panel, accounts, permissions, sessions | Server side done; Electron UI in progress |
+| A | Desktop control panel, accounts, permissions, sessions | All screens done; packaging (electron-builder) remaining |
 | B | Encrypted vaults | Not started |
 | C | Storage across drives | Not started |
 | D | Sync | Not started |
@@ -94,8 +94,16 @@ prove them. Current suites, all run against a live server:
 | `test/throughput.mjs` | 1 GB round trip with end-to-end checksum |
 | `test/permissions.mjs` | per-role capability, album scoping, session revocation, immediate disable, last-admin lockout protection |
 | `test/migration.mjs` | a pre-roles config.json still signs in and upgrades to admin |
+| `test/library.mjs` | library stats, same-volume rename, a genuine cross-volume move (C:↔D: on this machine), nesting/non-empty-destination refusal with the source left untouched, cache/trash clearing |
 
-All 5 suites, 115 checks, pass together as of the accounts/permissions/sessions merge.
+All 6 suites, 143 checks, pass together as of the desktop-screens merge.
+
+**Desktop app status:** Electron control panel with five working screens
+(Status, Accounts, Devices, Library, Settings), verified end to end against
+the running app — accounts created via the UI can sign in over the real HTTP
+API, revoking a session in Devices actually 401s that cookie, changing the
+port in Settings actually restarts the server. Not yet packaged as an
+installer (Task 15) or tested on macOS/Linux (Phase E).
 
 ---
 
