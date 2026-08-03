@@ -15,6 +15,7 @@ library/
 # Packaged output and staged binaries.
 # vendor/ holds ~370 MB of ffmpeg and libvips copied in by build.js.
 dist/
+dist-desktop/
 build/
 bin/
 vendor/
