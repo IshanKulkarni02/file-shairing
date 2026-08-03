@@ -8,7 +8,7 @@
  * other device on the network.
  */
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, clipboard } = require('electron');
 const path = require('path');
 const QRCode = require('qrcode');
 
@@ -33,6 +33,9 @@ const configLib = require('../lib/config');
 const serverApp = require('../lib/server-app');
 const net = require('../lib/net');
 const ffmpeg = require('../lib/ffmpeg');
+const accounts = require('../lib/accounts');
+const sessions = require('../lib/sessions');
+const library = require('../lib/library');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -54,6 +57,17 @@ async function stopServer() {
   if (!serverHandle) return;
   await serverHandle.stop();
   serverHandle = null;
+}
+
+async function restartServer() {
+  const wasRunning = Boolean(serverHandle);
+  await stopServer();
+  if (wasRunning) await startServer();
+}
+
+/** Where the library actually is right now, whether or not the server is running. */
+function libraryPath() {
+  return serverHandle?.LIBRARY ?? path.resolve(config.library);
 }
 
 /**
@@ -82,9 +96,12 @@ async function currentStatus() {
     mdnsHost: net.mdnsHost(),
     primaryUrl,
     qrDataUrl,
-    library: serverHandle?.LIBRARY ?? path.resolve(config.library),
+    library: libraryPath(),
     ffmpegReady: ffmpeg.tools().available,
     closeToTray: config.closeToTray,
+    startOnLogin: config.startOnLogin,
+    sessionDays: config.sessionDays,
+    httpsEnabled: Boolean(config.httpsPort),
     // Only non-null on the very first run ever — the caller should show it
     // once and never be able to fetch it again after this process exits.
     generatedPassword: generated,
@@ -178,9 +195,134 @@ ipcMain.handle('server:stop', async () => {
   return currentStatus();
 });
 
-ipcMain.handle('library:open', () => shell.openPath(currentStatus().library));
-
 ipcMain.handle('app:quit', () => { quitting = true; app.quit(); });
+
+ipcMain.handle('dialog:pickFolder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'] });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('clipboard:copy', (event, text) => { clipboard.writeText(String(text)); });
+
+// --- accounts ----------------------------------------------------------------
+// The desktop app manages accounts directly against the same in-memory
+// config object the running server reads on every request — no login flow
+// of its own is needed, since being able to launch this app on this machine
+// already implies at least as much trust as knowing the admin password.
+
+// Electron wraps a thrown error's message with an "Error invoking remote
+// method '<channel>': " prefix, which is not something to show someone as
+// an error message. Domain errors (a taken username, the last admin
+// account) are caught here and returned as a plain {ok:false, error} shape
+// instead; anything unexpected still throws, so a real bug is still loud in
+// the console rather than silently swallowed.
+function guarded(fn) {
+  return async (...args) => {
+    try {
+      return { ok: true, ...(await fn(...args)) };
+    } catch (err) {
+      if (err instanceof accounts.AccountError || err instanceof library.LibraryError) {
+        return { ok: false, error: err.message };
+      }
+      throw err;
+    }
+  };
+}
+
+ipcMain.handle('accounts:list', () => accounts.list(config));
+
+ipcMain.handle('accounts:create', guarded((event, input) =>
+  ({ account: accounts.create(config, input) })));
+
+ipcMain.handle('accounts:update', guarded((event, username, patch) => {
+  const updated = accounts.update(config, username, patch);
+  // Mirrors the HTTP route in lib/server-app.js: a disabled account must not
+  // keep working on a session it already has, not just fail future logins.
+  if (patch?.disabled === true) sessions.revokeAllForUser(username);
+  return { account: updated };
+}));
+
+ipcMain.handle('accounts:remove', guarded((event, username) => {
+  accounts.remove(config, username);
+  sessions.revokeAllForUser(username);
+  return {};
+}));
+
+// --- sessions / devices --------------------------------------------------
+
+ipcMain.handle('sessions:list', () => sessions.list());
+ipcMain.handle('sessions:revoke', (event, id) => sessions.revoke(id));
+
+// --- library ---------------------------------------------------------------
+
+ipcMain.handle('library:open', () => shell.openPath(libraryPath()));
+
+ipcMain.handle('library:stats', async () => {
+  const dir = libraryPath();
+  const [total, cache, trash] = await Promise.all([
+    library.getStats(dir),
+    library.getCacheStats(dir),
+    library.getTrashStats(dir),
+  ]);
+  return { path: dir, total, cache, trash };
+});
+
+ipcMain.handle('library:clearCache', () => library.clearThumbnailCache(libraryPath()));
+ipcMain.handle('library:emptyTrash', () => library.emptyTrash(libraryPath()));
+
+ipcMain.handle('library:move', guarded(async (event, { newPath, mode }) => {
+  const wasRunning = Boolean(serverHandle);
+  await stopServer();
+  try {
+    const result = await library.moveLibrary(libraryPath(), newPath, mode);
+    config.library = path.resolve(newPath);
+    configLib.save(config);
+    return result;
+  } finally {
+    // Whether the move succeeded or failed, the server should end up running
+    // again if it was running before — a failed move must not leave the
+    // library offline on top of not having moved.
+    if (wasRunning) await startServer();
+    refreshTrayMenu();
+    notifyRenderer();
+  }
+}));
+
+// --- settings --------------------------------------------------------------
+
+ipcMain.handle('settings:get', () => ({
+  port: config.port,
+  httpsPort: config.httpsPort,
+  sessionDays: config.sessionDays,
+  closeToTray: config.closeToTray,
+  startOnLogin: config.startOnLogin,
+}));
+
+ipcMain.handle('settings:update', async (event, patch) => {
+  const needsRestart = (
+    (patch.port !== undefined && patch.port !== config.port)
+    || (patch.httpsPort !== undefined && patch.httpsPort !== config.httpsPort)
+  );
+
+  if (patch.port !== undefined) config.port = Number(patch.port);
+  if (patch.httpsPort !== undefined) config.httpsPort = Number(patch.httpsPort);
+  if (patch.sessionDays !== undefined) config.sessionDays = Number(patch.sessionDays);
+  if (patch.closeToTray !== undefined) config.closeToTray = Boolean(patch.closeToTray);
+
+  if (patch.startOnLogin !== undefined) {
+    config.startOnLogin = Boolean(patch.startOnLogin);
+    // Electron's own login-item API — no extra dependency, and it is what
+    // actually registers with Windows (or macOS); just storing the setting
+    // in config.json would not make the OS do anything.
+    app.setLoginItemSettings({ openAtLogin: config.startOnLogin });
+  }
+
+  configLib.save(config);
+  if (needsRestart) await restartServer();
+  refreshTrayMenu();
+  notifyRenderer();
+  return currentStatus();
+});
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -189,9 +331,23 @@ ipcMain.handle('app:quit', () => { quitting = true; app.quit(); });
 app.whenReady().then(async () => {
   createWindow();
   createTray();
+
+  // The page usually finishes loading well before the server does (starting
+  // HTTPS means generating or reading a certificate), so 'did-finish-load'
+  // typically fires *during* the startServer() await below. Registering a
+  // `.once()` listener only after that await would miss an event that
+  // already happened, and the renderer's first paint would be stuck showing
+  // "Stopped" forever with nothing left to correct it. Capturing the event
+  // as a promise right away, then awaiting it afterwards, is correct
+  // regardless of which finishes first.
+  const windowReady = new Promise((resolve) => {
+    mainWindow.webContents.once('did-finish-load', resolve);
+  });
+
   await startServer();
   refreshTrayMenu();
-  mainWindow.webContents.once('did-finish-load', notifyRenderer);
+  await windowReady;
+  notifyRenderer();
 });
 
 app.on('activate', () => {
