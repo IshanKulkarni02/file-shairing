@@ -8,6 +8,10 @@ config.json
 library/
 .lanshare/
 
+# Server-level state next to config.json: session records, independent of
+# wherever the library happens to live.
+.lanshare-server/
+
 # Packaged output and staged binaries.
 # vendor/ holds ~370 MB of ffmpeg and libvips copied in by build.js.
 dist/
