@@ -8,7 +8,8 @@
     "setup": "node setup.js",
     "icons": "node tools/make-icons.js",
     "samples": "node test/make-samples.mjs",
-    "build": "node build.js"
+    "build": "node build.js",
+    "desktop": "electron desktop/main.js"
   },
   "engines": {
     "node": ">=18"
@@ -27,11 +28,14 @@
     "archiver": "^6.0.2",
     "busboy": "^1.6.0",
     "express": "^4.21.2",
+    "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "selfsigned": "^5.5.0",
     "sharp": "^0.33.5"
   },
   "devDependencies": {
-    "@yao-pkg/pkg": "^6.22.0"
+    "@yao-pkg/pkg": "^6.22.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3"
   }
 }
