@@ -17,7 +17,7 @@ the internet without port forwarding.
 |---|---|---|
 | — | Web gallery, media pipeline, PWA, single-file exe | **Done** |
 | 0 | Repository workflow | **Done** (PRs pending `gh`, see below) |
-| A | Desktop control panel, accounts, permissions, sessions | Not started |
+| A | Desktop control panel, accounts, permissions, sessions | Server side done; Electron UI in progress |
 | B | Encrypted vaults | Not started |
 | C | Storage across drives | Not started |
 | D | Sync | Not started |
@@ -92,6 +92,10 @@ prove them. Current suites, all run against a live server:
 | `test/media.mjs` | thumbnails, metadata, HEVC detection, live transcoding |
 | `test/pwa.mjs` | HTTPS and every PWA install requirement |
 | `test/throughput.mjs` | 1 GB round trip with end-to-end checksum |
+| `test/permissions.mjs` | per-role capability, album scoping, session revocation, immediate disable, last-admin lockout protection |
+| `test/migration.mjs` | a pre-roles config.json still signs in and upgrades to admin |
+
+All 5 suites, 115 checks, pass together as of the accounts/permissions/sessions merge.
 
 ---
 
@@ -112,6 +116,11 @@ Recorded so they are not relitigated or quietly reversed.
 | Google Drive via Drive for Desktop | It is already a mounted folder; direct API integration needs a Google Cloud project and OAuth consent for no real gain |
 | PBKDF2-HMAC-SHA512 for vault keys | scrypt is stronger, but WebCrypto has no scrypt and end-to-end vaults must derive the same key in a browser. One shared derivation beats the margin |
 | Vaults chunked at 1 MiB, AES-256-GCM | Whole-file encryption would break video seeking; chunking keeps range requests working |
+| Sessions stored in `.lanshare-server/`, next to config.json | Not under `library/` — sessions must stay reachable even after the library moves to another drive (Phase C) |
+| Roles/sessions checked fresh on every request | The old stateless HMAC token kept validating on its own for up to 30 days; a demoted or disabled account must lose access immediately |
+| `config` object mutated in place, never replaced wholesale | `requireAuth`'s closure holds one reference for the process lifetime; `config = {...}` would silently detach it from later account edits |
+| `/api/list` resolves the request path loosely before scoping it | A restricted account's "/" is virtual — not literally inside any of its own roots — so the strict per-account check must not run against it, only against real paths |
+| Cannot disable, demote or delete the last enabled admin | Otherwise there would be nobody left with permission to undo the mistake |
 | Encrypted albums sync as ciphertext | Never decrypting to copy is what makes a lost drive or a cloud copy safe |
 | Two-way sync compares **three** states | Without a baseline snapshot, "deleted here" and "added there" are indistinguishable and deleted files come back |
 
