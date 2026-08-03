@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { stageFfmpeg: stageFfmpegShared, copyInto, log, mb } = require('./tools/stage-ffmpeg');
 
 const ROOT = __dirname;
 const VENDOR = path.join(ROOT, 'vendor');
@@ -20,35 +21,6 @@ const DIST = path.join(ROOT, 'dist');
 const TARGET = 'node22-win-x64';
 
 const platform = `${process.platform}-${process.arch}`;
-
-function log(message) {
-  console.log(`  ${message}`);
-}
-
-function mb(bytes) {
-  return `${(bytes / 1048576).toFixed(1)} MB`;
-}
-
-function findOnPath(name) {
-  const probe = process.platform === 'win32' ? 'where' : 'which';
-  const res = spawnSync(probe, [name], { encoding: 'utf8' });
-  if (res.status !== 0) return null;
-  const first = res.stdout.split(/\r?\n/).find((line) => line.trim());
-  return first && fs.existsSync(first.trim()) ? first.trim() : null;
-}
-
-function copyInto(source, targetDir, label) {
-  fs.mkdirSync(targetDir, { recursive: true });
-  const target = path.join(targetDir, path.basename(source));
-  // Staging is the slow part of the build; skip files already in place.
-  if (fs.existsSync(target) && fs.statSync(target).size === fs.statSync(source).size) {
-    log(`${label} already staged (${mb(fs.statSync(target).size)})`);
-    return target;
-  }
-  fs.copyFileSync(source, target);
-  log(`staged ${label} (${mb(fs.statSync(target).size)})`);
-  return target;
-}
 
 // --- stage sharp -----------------------------------------------------------
 
@@ -68,35 +40,6 @@ function stageSharp() {
   for (const entry of fs.readdirSync(libDir)) {
     if (!/\.(node|dll)$/i.test(entry)) continue;
     copyInto(path.join(libDir, entry), targetDir, `sharp/${entry}`);
-  }
-}
-
-// --- stage ffmpeg ----------------------------------------------------------
-
-function stageFfmpeg() {
-  const targetDir = path.join(VENDOR, 'ffmpeg');
-  const missing = [];
-
-  for (const tool of ['ffmpeg', 'ffprobe']) {
-    const exe = process.platform === 'win32' ? `${tool}.exe` : tool;
-    const staged = path.join(targetDir, exe);
-    if (fs.existsSync(staged)) {
-      log(`${tool} already staged (${mb(fs.statSync(staged).size)})`);
-      continue;
-    }
-    const found = findOnPath(tool);
-    if (!found) {
-      missing.push(tool);
-      continue;
-    }
-    copyInto(found, targetDir, tool);
-  }
-
-  if (missing.length) {
-    console.warn(`\n  WARNING: ${missing.join(' and ')} not found on PATH.`);
-    console.warn('  The executable will build, but video thumbnails and the');
-    console.warn('  HEVC fallback will not work on a machine without ffmpeg.');
-    console.warn('  Install ffmpeg and rebuild for a fully self-contained app.\n');
   }
 }
 
@@ -134,7 +77,7 @@ function main() {
   console.log('\n  Building LANShare\n');
 
   stageSharp();
-  stageFfmpeg();
+  stageFfmpegShared(path.join(VENDOR, 'ffmpeg'));
 
   const output = runPkg();
 

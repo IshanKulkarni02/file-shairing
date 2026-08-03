@@ -2,14 +2,15 @@
   "name": "lanshare",
   "version": "1.0.0",
   "description": "Password-protected LAN photo & video library. Browse, preview, upload and download from any device on your network.",
-  "main": "server.js",
+  "main": "desktop/main.js",
   "scripts": {
     "start": "node server.js",
     "setup": "node setup.js",
     "icons": "node tools/make-icons.js",
     "samples": "node test/make-samples.mjs",
     "build": "node build.js",
-    "desktop": "electron desktop/main.js"
+    "desktop": "electron desktop/main.js",
+    "build:desktop": "node desktop-build.js"
   },
   "engines": {
     "node": ">=18"
@@ -23,6 +24,49 @@
       "node22-win-x64"
     ],
     "outputPath": "dist"
+  },
+  "build": {
+    "appId": "com.lanshare.desktop",
+    "productName": "LANShare",
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "files": [
+      "desktop/**/*",
+      "lib/**/*",
+      "public/**/*",
+      "package.json",
+      "!test/**",
+      "!tools/**",
+      "!build.js",
+      "!desktop-build.js",
+      "!vendor/**",
+      "!dist/**",
+      "!dist-desktop/**",
+      "!library/**",
+      "!config.json",
+      "!.lanshare-server/**",
+      "!*.md"
+    ],
+    "asarUnpack": [
+      "node_modules/@img/**/*",
+      "node_modules/sharp/**/*"
+    ],
+    "extraResources": [
+      { "from": "vendor/ffmpeg", "to": "ffmpeg", "filter": ["**/*"] }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "desktop/ui/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LANShare"
+    }
   },
   "dependencies": {
     "archiver": "^6.0.2",
