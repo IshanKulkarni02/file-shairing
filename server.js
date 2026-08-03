@@ -163,7 +163,10 @@ app.get('/cert', (req, res) => {
 app.get('/login', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'login.html')));
 
 // Static assets carry no secrets and the login page needs them.
-app.use('/assets', express.static(PUBLIC_DIR, { maxAge: '1h', index: false }));
+// maxAge 0 means the browser revalidates and usually gets a 304, which costs
+// nothing on a LAN and stops devices running last week's JavaScript after an
+// update. Offline caching is the service worker's job, not this header's.
+app.use('/assets', express.static(PUBLIC_DIR, { maxAge: 0, etag: true, index: false }));
 app.get('/manifest.webmanifest', (req, res) =>
   res.sendFile(path.join(PUBLIC_DIR, 'manifest.webmanifest')));
 app.get('/sw.js', (req, res) => {
