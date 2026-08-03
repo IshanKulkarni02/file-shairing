@@ -9,12 +9,40 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
+
 contextBridge.exposeInMainWorld('lanshare', {
-  getStatus: () => ipcRenderer.invoke('status'),
-  startServer: () => ipcRenderer.invoke('server:start'),
-  stopServer: () => ipcRenderer.invoke('server:stop'),
-  openLibraryFolder: () => ipcRenderer.invoke('library:open'),
-  quit: () => ipcRenderer.invoke('app:quit'),
+  getStatus: () => invoke('status'),
+  startServer: () => invoke('server:start'),
+  stopServer: () => invoke('server:stop'),
+  openLibraryFolder: () => invoke('library:open'),
+  quit: () => invoke('app:quit'),
+  pickFolder: () => invoke('dialog:pickFolder'),
+  copyToClipboard: (text) => invoke('clipboard:copy', text),
+
+  accounts: {
+    list: () => invoke('accounts:list'),
+    create: (input) => invoke('accounts:create', input),
+    update: (username, patch) => invoke('accounts:update', username, patch),
+    remove: (username) => invoke('accounts:remove', username),
+  },
+
+  sessions: {
+    list: () => invoke('sessions:list'),
+    revoke: (id) => invoke('sessions:revoke', id),
+  },
+
+  library: {
+    stats: () => invoke('library:stats'),
+    clearCache: () => invoke('library:clearCache'),
+    emptyTrash: () => invoke('library:emptyTrash'),
+    move: (newPath, mode) => invoke('library:move', { newPath, mode }),
+  },
+
+  settings: {
+    get: () => invoke('settings:get'),
+    update: (patch) => invoke('settings:update', patch),
+  },
 
   /** Fires after anything that could have changed the status view. */
   onStatusChanged: (callback) => {

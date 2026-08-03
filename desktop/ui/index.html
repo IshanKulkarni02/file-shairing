@@ -17,16 +17,16 @@
   <button class="nav__item is-active" data-panel="status">
     <span class="dot">●</span> Status
   </button>
-  <button class="nav__item" data-panel="accounts" disabled title="Coming soon">
+  <button class="nav__item" data-panel="accounts">
     <span class="dot">◐</span> Accounts
   </button>
-  <button class="nav__item" data-panel="devices" disabled title="Coming soon">
+  <button class="nav__item" data-panel="devices">
     <span class="dot">◑</span> Devices
   </button>
-  <button class="nav__item" data-panel="library" disabled title="Coming soon">
+  <button class="nav__item" data-panel="library">
     <span class="dot">◒</span> Library
   </button>
-  <button class="nav__item" data-panel="settings" disabled title="Coming soon">
+  <button class="nav__item" data-panel="settings">
     <span class="dot">◓</span> Settings
   </button>
 
@@ -86,22 +86,133 @@
 
   <section class="panel" id="panel-accounts">
     <h1>Accounts</h1>
-    <p class="empty-note">Coming soon.</p>
+    <p class="panel__sub">Who can sign in, and what they can do.</p>
+
+    <div class="card" id="accountsList"></div>
+
+    <div class="card">
+      <h3 style="font-size:.9rem;margin-bottom:.6rem" id="accountFormTitle">Add an account</h3>
+      <form id="accountForm">
+        <div class="field">
+          <label class="field__label" for="acctUsername">Username</label>
+          <input class="field__input" id="acctUsername" required autocomplete="off" autocapitalize="none">
+        </div>
+        <div class="field">
+          <label class="field__label" for="acctPassword">Password</label>
+          <input class="field__input" id="acctPassword" type="password" autocomplete="new-password">
+          <p class="field__hint" id="acctPasswordHint">At least 4 characters.</p>
+        </div>
+        <div class="field">
+          <label class="field__label" for="acctRole">Role</label>
+          <select class="field__input" id="acctRole">
+            <option value="viewer">Viewer — browse and download</option>
+            <option value="contributor">Contributor — + upload, new albums</option>
+            <option value="manager">Manager — + rename, move, delete</option>
+            <option value="admin">Admin — + manage accounts and settings</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field__label" for="acctRoots">Restrict to albums</label>
+          <input class="field__input" id="acctRoots" placeholder="Family, Trip 2026 — blank means full library">
+        </div>
+        <label class="check-row">
+          <input type="checkbox" id="acctDisabled"> Disabled (blocks sign-in without deleting the account)
+        </label>
+        <p class="field__error" id="acctError"></p>
+        <div class="field-row" style="margin-top:.75rem">
+          <button type="submit" class="btn btn--primary" id="acctSubmitBtn">Add account</button>
+          <button type="button" class="btn btn--ghost" id="acctCancelBtn" hidden>Cancel</button>
+        </div>
+      </form>
+    </div>
   </section>
 
   <section class="panel" id="panel-devices">
     <h1>Devices</h1>
-    <p class="empty-note">Coming soon.</p>
+    <p class="panel__sub">Every signed-in session, across every account.</p>
+    <div class="card" id="devicesList"></div>
   </section>
 
   <section class="panel" id="panel-library">
     <h1>Library</h1>
-    <p class="empty-note">Coming soon.</p>
+    <p class="panel__sub">Where your photos and videos are stored.</p>
+
+    <div class="card">
+      <div class="addr" style="margin-bottom:.6rem">
+        <span class="addr__value" id="libStatsPath">—</span>
+      </div>
+      <div class="stat-grid" id="libStatsGrid"></div>
+      <div class="field-row" style="margin-top:.75rem">
+        <button class="btn btn--ghost" id="clearCacheBtn">Clear thumbnail cache</button>
+        <button class="btn btn--ghost" id="emptyTrashBtn">Empty trash</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:.9rem;margin-bottom:.6rem">Change location</h3>
+      <div class="field-row">
+        <input class="field__input" id="movePathInput" placeholder="Choose a folder…" readonly style="flex:1">
+        <button class="btn" id="browseBtn">Browse…</button>
+      </div>
+      <div style="margin-top:.6rem">
+        <label class="check-row">
+          <input type="radio" name="moveMode" value="move" checked> Move my files there
+        </label>
+        <label class="check-row">
+          <input type="radio" name="moveMode" value="point"> Just point there (leave existing files alone)
+        </label>
+      </div>
+      <p class="field__error" id="moveError"></p>
+      <p class="panel__sub" id="moveNote" style="margin:.5rem 0 0"></p>
+      <div class="field-row" style="margin-top:.75rem">
+        <button class="btn btn--primary" id="moveBtn" disabled>Change library location</button>
+      </div>
+    </div>
   </section>
 
   <section class="panel" id="panel-settings">
     <h1>Settings</h1>
-    <p class="empty-note">Coming soon.</p>
+    <p class="panel__sub">Ports, security and how LANShare starts.</p>
+
+    <form class="card" id="settingsForm">
+      <div class="field">
+        <label class="field__label" for="setPort">Port</label>
+        <input class="field__input" id="setPort" type="number" min="1" max="65535">
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="setHttpsEnabled"> Enable the secure (HTTPS) address
+      </label>
+      <div class="field" id="setHttpsPortField">
+        <label class="field__label" for="setHttpsPort">HTTPS port</label>
+        <input class="field__input" id="setHttpsPort" type="number" min="1" max="65535">
+      </div>
+      <div class="field">
+        <label class="field__label" for="setSessionDays">Stay signed in for (days)</label>
+        <input class="field__input" id="setSessionDays" type="number" min="1" max="365">
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="setCloseToTray"> Keep running in the tray when the window is closed
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="setStartOnLogin"> Start LANShare when I sign in to this computer
+      </label>
+      <p class="field__error" id="settingsError"></p>
+      <div class="field-row" style="margin-top:.75rem">
+        <button type="submit" class="btn btn--primary">Save settings</button>
+      </div>
+    </form>
+
+    <div class="card">
+      <h3 style="font-size:.9rem;margin-bottom:.4rem">Let other devices connect</h3>
+      <p class="panel__sub" style="margin:0 0 .6rem">
+        Windows Firewall may block other devices until you allow LANShare once,
+        in an administrator PowerShell window.
+      </p>
+      <div class="addr" style="margin-bottom:.6rem">
+        <span class="addr__value" id="firewallCmd" style="user-select:text"></span>
+      </div>
+      <button class="btn btn--full" id="copyFirewallBtn">Copy command</button>
+    </div>
   </section>
 
 </main>

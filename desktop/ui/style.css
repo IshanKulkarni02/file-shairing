@@ -227,7 +227,7 @@ button { font: inherit; color: inherit; cursor: pointer; border: none; backgroun
   display: inline-block;
 }
 
-.field-row { display: flex; gap: .5rem; margin-top: .5rem; }
+.field-row { display: flex; gap: .5rem; margin-top: .5rem; align-items: center; }
 
 .empty-note {
   text-align: center;
@@ -235,3 +235,103 @@ button { font: inherit; color: inherit; cursor: pointer; border: none; backgroun
   padding: 2.5rem 1rem;
   font-size: .875rem;
 }
+
+/* -------------------------------------------------------------------------
+   Forms
+   ------------------------------------------------------------------------- */
+
+.field { margin-bottom: .75rem; }
+.field__label {
+  display: block;
+  font-size: .75rem;
+  font-weight: 700;
+  margin-bottom: .3rem;
+  color: var(--text-soft);
+}
+.field__input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 2px solid var(--line);
+  background: var(--surface-2);
+  font: inherit;
+  color: var(--text);
+}
+.field__input:focus { outline: none; border-color: var(--accent); }
+.field__hint { margin: .3rem 0 0; font-size: .6875rem; color: var(--text-soft); }
+.field__error {
+  display: none;
+  margin: .5rem 0 0;
+  color: #D2452A;
+  font-size: .75rem;
+  font-weight: 700;
+}
+.field__error.is-shown { display: block; }
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .8125rem;
+  margin-bottom: .6rem;
+  cursor: pointer;
+  -webkit-user-select: none;
+}
+.check-row input { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+
+/* -------------------------------------------------------------------------
+   List rows: accounts, devices
+   ------------------------------------------------------------------------- */
+
+.row-list { display: grid; gap: .5rem; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .6rem .1rem;
+  border-bottom: 1px solid var(--line);
+}
+.row:last-child { border-bottom: none; }
+.row__main { flex: 1; min-width: 0; }
+.row__title { font-weight: 700; font-size: .8125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row__sub { font-size: .6875rem; color: var(--text-soft); margin-top: .1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row__actions { display: flex; gap: .35rem; flex: none; }
+.row.is-disabled .row__title { color: var(--text-soft); text-decoration: line-through; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: .1rem .5rem;
+  border-radius: var(--r-pill);
+  font-size: .625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+  background: var(--surface-2);
+  color: var(--text-soft);
+  flex: none;
+}
+.badge--admin { background: var(--coral); color: #fff; }
+.badge--manager { background: var(--butter); color: var(--cocoa); }
+.badge--contributor { background: var(--grass); color: var(--cocoa); }
+.badge--current { background: var(--grass); color: var(--cocoa); }
+
+.btn--sm { padding: 5px 10px; font-size: .6875rem; }
+
+/* -------------------------------------------------------------------------
+   Library stats
+   ------------------------------------------------------------------------- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: .5rem;
+}
+.stat {
+  background: var(--surface-2);
+  border-radius: 10px;
+  padding: .6rem .5rem;
+  text-align: center;
+}
+.stat__value { font-family: var(--font-display); font-weight: 700; font-size: 1rem; }
+.stat__label { font-size: .625rem; color: var(--text-soft); text-transform: uppercase; letter-spacing: .02em; margin-top: .15rem; }
