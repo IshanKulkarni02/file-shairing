@@ -16,7 +16,7 @@ the internet without port forwarding.
 | Phase | What | State |
 |---|---|---|
 | — | Web gallery, media pipeline, PWA, single-file exe | **Done** |
-| 0 | Repository workflow | **In progress** |
+| 0 | Repository workflow | **Done** (PRs pending `gh`, see below) |
 | A | Desktop control panel, accounts, permissions, sessions | Not started |
 | B | Encrypted vaults | Not started |
 | C | Storage across drives | Not started |
@@ -52,6 +52,28 @@ gh pr merge --squash --delete-branch
 
 **Claude does not ask before merging a PR into `dev`.** Agreed 2026-08-04.
 Merges into `main` are release decisions and are announced, not silent.
+
+#### One-time setup still needed for real PRs
+
+The GitHub CLI is not installed and `winget install --id GitHub.cli` hangs on
+this machine — it wants an elevation prompt that a non-interactive shell cannot
+answer. Until it is installed, each task still gets its own branch, pushed, and
+merged into `dev` with `--no-ff`, so history and branch structure are identical
+to a squashed PR; the only thing missing is the pull request record on GitHub.
+
+To enable actual PRs, run these once in your own terminal:
+
+```bash
+winget install --id GitHub.cli
+gh auth login
+```
+
+Claude will not ask you for a token and cannot accept one — authentication has
+to happen in your own session. Once `gh auth status` succeeds, the workflow
+switches to `gh pr create` / `gh pr merge` with no other changes.
+
+The remote is also still named `file-shairing`. Rename it in GitHub → Settings,
+then `git remote set-url origin <new-url>`.
 
 ### Files
 
