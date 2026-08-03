@@ -1,5 +1,9 @@
 'use strict';
 
+// Must run before anything pulls in sharp: in a packaged build this unpacks
+// the native binaries and redirects sharp at them. No-op under plain node.
+require('./lib/runtime').init();
+
 const express = require('express');
 const busboy = require('busboy');
 const archiver = require('archiver');
@@ -9,7 +13,6 @@ const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
-const sharp = require('sharp');
 
 const configLib = require('./lib/config');
 const auth = require('./lib/auth');

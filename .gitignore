@@ -8,10 +8,12 @@ config.json
 library/
 .lanshare/
 
-# Packaged output and bundled binaries
+# Packaged output and staged binaries.
+# vendor/ holds ~370 MB of ffmpeg and libvips copied in by build.js.
 dist/
 build/
 bin/
+vendor/
 
 # TLS material, if you enable HTTPS
 *.pem

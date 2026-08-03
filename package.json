@@ -7,10 +7,21 @@
     "start": "node server.js",
     "setup": "node setup.js",
     "icons": "node tools/make-icons.js",
-    "samples": "node test/make-samples.mjs"
+    "samples": "node test/make-samples.mjs",
+    "build": "node build.js"
   },
   "engines": {
     "node": ">=18"
+  },
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "vendor/**/*"
+    ],
+    "targets": [
+      "node22-win-x64"
+    ],
+    "outputPath": "dist"
   },
   "dependencies": {
     "archiver": "^6.0.2",
@@ -19,5 +30,8 @@
     "qrcode-terminal": "^0.12.0",
     "selfsigned": "^5.5.0",
     "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.22.0"
   }
 }
