@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+<title>LANShare</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav__brand">
+    <img src="icon.png" alt="">
+    <span>LANShare</span>
+  </div>
+
+  <button class="nav__item is-active" data-panel="status">
+    <span class="dot">●</span> Status
+  </button>
+  <button class="nav__item" data-panel="accounts" disabled title="Coming soon">
+    <span class="dot">◐</span> Accounts
+  </button>
+  <button class="nav__item" data-panel="devices" disabled title="Coming soon">
+    <span class="dot">◑</span> Devices
+  </button>
+  <button class="nav__item" data-panel="library" disabled title="Coming soon">
+    <span class="dot">◒</span> Library
+  </button>
+  <button class="nav__item" data-panel="settings" disabled title="Coming soon">
+    <span class="dot">◓</span> Settings
+  </button>
+
+  <div class="nav__spacer"></div>
+
+  <div class="nav__status" id="navStatus">
+    <span class="led"></span>
+    <span id="navStatusLabel">Checking…</span>
+  </div>
+</nav>
+
+<main class="main">
+
+  <section class="panel is-active" id="panel-status">
+    <h1>Status</h1>
+    <p class="panel__sub">Your photos and videos, on your own network.</p>
+
+    <div class="card first-run" id="firstRunCard" hidden>
+      <strong>First run — an account was created for you</strong>
+      <div>username: <strong>admin</strong></div>
+      <div class="first-run__pass" id="firstRunPassword"></div>
+      <p style="margin:.25rem 0 0;color:var(--text-soft)">
+        Write this down — it will not be shown again. Change it any time from Accounts.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="status-row" id="statusRow">
+        <span class="status-row__led"></span>
+        <span class="status-row__label" id="statusLabel">Checking…</span>
+        <button class="btn" id="toggleBtn">…</button>
+      </div>
+      <p class="panel__sub" style="margin:0" id="ffmpegNote"></p>
+    </div>
+
+    <div class="card" id="addressesCard">
+      <h3 style="font-size:.9rem;margin-bottom:.25rem">Open on another device</h3>
+      <div class="addr-list" id="addrList"></div>
+      <div class="qr-wrap" id="qrWrap" hidden>
+        <img id="qrImg" alt="QR code for the LANShare address">
+        <p>Scan with a phone camera to open LANShare.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:.9rem;margin-bottom:.6rem">Library</h3>
+      <div class="addr" style="margin-bottom:.6rem">
+        <span class="addr__value" id="libraryPath">—</span>
+      </div>
+      <button class="btn btn--full" id="openLibraryBtn">Open library folder</button>
+    </div>
+
+    <div class="field-row">
+      <button class="btn btn--ghost" id="quitBtn">Quit LANShare</button>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-accounts">
+    <h1>Accounts</h1>
+    <p class="empty-note">Coming soon.</p>
+  </section>
+
+  <section class="panel" id="panel-devices">
+    <h1>Devices</h1>
+    <p class="empty-note">Coming soon.</p>
+  </section>
+
+  <section class="panel" id="panel-library">
+    <h1>Library</h1>
+    <p class="empty-note">Coming soon.</p>
+  </section>
+
+  <section class="panel" id="panel-settings">
+    <h1>Settings</h1>
+    <p class="empty-note">Coming soon.</p>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
