@@ -174,6 +174,67 @@ try {
     !JSON.stringify(vaultList).toLowerCase().includes('masterkey')
     && !JSON.stringify(vaultList).includes(PASSPHRASE));
 
+  // --- sharing access: extra passphrases and recovery codes ----------------
+
+  res = await req(`/api/vaults/keys?path=${q(ALBUM)}`);
+  const keysBody = await res.json();
+  check('the vault lists one key to start', keysBody.keys?.length === 1, JSON.stringify(keysBody));
+  check('the key list carries no key material',
+    !JSON.stringify(keysBody).includes('wrapped') && !JSON.stringify(keysBody).includes('salt'),
+    JSON.stringify(keysBody));
+
+  res = await req('/api/vaults/keys/add', json({
+    path: ALBUM, passphrase: 'a second good passphrase', label: 'Phone',
+  }));
+  const added = await res.json();
+  check('a second passphrase can be added', res.status === 200 && added.keys?.length === 2,
+    JSON.stringify(added));
+
+  // Both passphrases must now open the same vault.
+  await req('/api/vaults/lock', json({ path: ALBUM }));
+  res = await req('/api/vaults/unlock', json({ path: ALBUM, passphrase: 'a second good passphrase' }));
+  check('the newly added passphrase unlocks the vault', res.status === 200, `got ${res.status}`);
+
+  res = await req(`/api/file?path=${q(filePath)}`);
+  const viaSecond = Buffer.from(await res.arrayBuffer());
+  check('files decrypt correctly under the second passphrase', viaSecond.equals(payload));
+
+  // Recovery code.
+  res = await req('/api/vaults/recovery-code', json({ path: ALBUM }));
+  const recovery = await res.json();
+  check('a recovery code can be exported', res.status === 200 && typeof recovery.code === 'string',
+    JSON.stringify(recovery));
+  check('the recovery code comes with a warning that it cannot be revoked',
+    /cannot be revoked/i.test(recovery.warning || ''), recovery.warning);
+  check('the recovery code is grouped for a human to copy down',
+    /^[0-9A-Z]{4}(-[0-9A-Z]{1,4})+$/.test(recovery.code || ''), recovery.code);
+
+  await req('/api/vaults/lock', json({ path: ALBUM }));
+  res = await req('/api/vaults/unlock', json({ path: ALBUM, recoveryCode: recovery.code }));
+  check('the exported recovery code unlocks the vault', res.status === 200, `got ${res.status}`);
+
+  // The authorisation model: unlocking is what grants these, not being admin.
+  await req('/api/vaults/lock', json({ path: ALBUM }));
+  res = await req('/api/vaults/recovery-code', json({ path: ALBUM }));
+  check('a locked vault refuses to export a recovery code, even to an admin',
+    res.status === 423, `got ${res.status}`);
+  res = await req('/api/vaults/keys/add', json({ path: ALBUM, passphrase: 'sneaking in here' }));
+  check('a locked vault refuses to add a passphrase, even to an admin',
+    res.status === 423, `got ${res.status}`);
+
+  await req('/api/vaults/unlock', json({ path: ALBUM, passphrase: PASSPHRASE }));
+
+  // Removing keys.
+  res = await req(`/api/vaults/keys?path=${q(ALBUM)}`);
+  const before = (await res.json()).keys;
+  res = await req('/api/vaults/keys/remove', json({ path: ALBUM, keyId: before[1].id }));
+  const afterRemove = await res.json();
+  check('a passphrase can be removed', res.status === 200 && afterRemove.keys?.length === 1,
+    JSON.stringify(afterRemove));
+
+  res = await req('/api/vaults/keys/remove', json({ path: ALBUM, keyId: afterRemove.keys[0].id }));
+  check('removing the last way in is refused', res.status === 409, `got ${res.status}`);
+
   // --- ordinary albums are untouched ---------------------------------------
 
   res = await req('/api/mkdir', json({ path: '/', name: `Plain-${RUN}` }));
