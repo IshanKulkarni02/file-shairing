@@ -18,7 +18,7 @@ the internet without port forwarding.
 | — | Web gallery, media pipeline, PWA, single-file exe | **Done** |
 | 0 | Repository workflow | **Done** (PRs pending `gh`, see below) |
 | A | Desktop control panel, accounts, permissions, sessions | **Done** |
-| B | Encrypted vaults | Not started |
+| B | Encrypted vaults | Crypto core done (file format + keys); wiring into albums/routes/UI remaining |
 | C | Storage across drives | Not started |
 | D | Sync | Not started |
 | E | macOS and Linux | Not started |
@@ -95,6 +95,8 @@ prove them. Current suites, all run against a live server:
 | `test/permissions.mjs` | per-role capability, album scoping, session revocation, immediate disable, last-admin lockout protection |
 | `test/migration.mjs` | a pre-roles config.json still signs in and upgrades to admin |
 | `test/library.mjs` | library stats, same-volume rename, a genuine cross-volume move (C:↔D: on this machine), nesting/non-empty-destination refusal with the source left untouched, cache/trash clearing |
+| `test/vaultfile.mjs` | vault file round trips at every chunk boundary, eight byte-range shapes, and tamper detection: wrong key, flipped bit, dropped trailer, lopped-off final chunk, reordered chunks, a chunk grafted in from another file under the same key, altered header |
+| `test/vault.mjs` | envelope encryption, multiple passphrases on one vault, cross-vault key-entry transplant refused, recovery codes, per-file keys, and end-to-end integration with the file format |
 
 All 6 suites, 143 checks, pass together as of the desktop-screens merge.
 
@@ -149,6 +151,28 @@ which have independently produced misleading results.
 
 ---
 
+## Phase B progress
+
+**Crypto core done** — `lib/crypto/vaultfile.js` (the on-disk format) and
+`lib/crypto/vault.js` (keys), 57 tests between them.
+
+A flaw caught while writing the key layer, recorded because it is the kind
+that passes a careless test: the first `unlockWithRecoveryCode` "verified" a
+code by wrapping and then unwrapping a probe with that same key. That always
+succeeds regardless of the key, so it proved nothing — any 32 random bytes
+would have appeared to unlock the vault and then failed incomprehensibly on
+the first file. A recovery code *is* the master key, so there is nothing to
+unwrap to prove it; vaults now store a `check` blob (a known value encrypted
+under the master key at creation) and codes are verified against that.
+
+**Still to do in Phase B:** marking an album as a vault and storing its
+metadata alongside it, wiring encryption into the upload path and decryption
+into the download/stream/thumbnail paths, encrypting the thumbnail cache for
+vault contents, the end-to-end (browser-side) vault type, and the desktop UI
+for creating vaults and exporting keys.
+
+---
+
 ## Decisions and why
 
 Recorded so they are not relitigated or quietly reversed.
@@ -173,6 +197,11 @@ Recorded so they are not relitigated or quietly reversed.
 | Cannot disable, demote or delete the last enabled admin | Otherwise there would be nobody left with permission to undo the mistake |
 | Encrypted albums sync as ciphertext | Never decrypting to copy is what makes a lost drive or a cloud copy safe |
 | Two-way sync compares **three** states | Without a baseline snapshot, "deleted here" and "added there" are indistinguishable and deleted files come back |
+| A random vault master key, wrapped per passphrase — never derived from one | Lets one vault hold several passphrases and recovery codes as list entries, so granting or rotating access never re-encrypts the album |
+| Chunk AAD binds header hash + index + end-of-file flag | Independent chunks are the point of the format and also its danger: without this, chunks could be reordered, grafted in from another file under the same key, or the file truncated, and every remaining chunk would still authenticate |
+| Plaintext length in an encrypted trailer, not the header | The length is unknown until an upload finishes streaming, by which point the header is already sealed into every chunk's AAD. At the end, it also makes truncation-to-zero-chunks detectable rather than looking like an empty file |
+| Per-file keys, not one key per vault | Restarts the chunk nonce counter safely for every file |
+| Vault stores a `check` blob | A recovery code *is* the master key, so nothing unwraps to prove it. Without a stored verifier, any 32 random bytes appear to unlock the vault and fail later on the first file |
 
 ---
 
