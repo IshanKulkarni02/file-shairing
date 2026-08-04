@@ -235,6 +235,92 @@ try {
   res = await req('/api/vaults/keys/remove', json({ path: ALBUM, keyId: afterRemove.keys[0].id }));
   check('removing the last way in is refused', res.status === 409, `got ${res.status}`);
 
+  // --- crossing a vault boundary -------------------------------------------
+  // Every one of these was silently broken until an audit: /api/move,
+  // /api/zip, /api/meta and /api/delete never learned vaults existed. Moving
+  // a file out of a vault reported success and left an undecryptable blob.
+
+  await req('/api/vaults/unlock', json({ path: ALBUM, passphrase: PASSPHRASE }));
+  res = await req('/api/mkdir', json({ path: '/', name: `Plain-cross-${RUN}` }));
+  const plainAlbum = `/Plain-cross-${RUN}`;
+  check('created a plain album to move across', res.status === 200);
+
+  const marker = 'MOVE-ACROSS-MARKER-must-stay-readable';
+  const crossForm = new FormData();
+  crossForm.append('file', new Blob([Buffer.from(marker)]), 'cross.txt');
+  res = await req(`/api/upload?dir=${q(ALBUM)}&rel=cross.txt`, { method: 'POST', body: crossForm });
+  const crossUp = await res.json();
+  check('uploaded a file into the vault to move out',
+    crossUp.saved?.[0]?.encrypted === true, JSON.stringify(crossUp.saved?.[0]));
+  check('the reported size is the plaintext size, not the multipart body',
+    crossUp.saved?.[0]?.size === marker.length,
+    `${crossUp.saved?.[0]?.size} vs ${marker.length}`);
+
+  // Out of the vault: must arrive as readable plaintext, not a blob.
+  res = await req('/api/move', json({ paths: [`${ALBUM}/cross.txt`], to: plainAlbum }));
+  const movedOut = await res.json();
+  check('moving out of a vault succeeds', movedOut.ok === true, JSON.stringify(movedOut));
+
+  res = await req(`/api/file?path=${q(`${plainAlbum}/cross.txt`)}`);
+  const movedOutBody = await res.text();
+  check('a file moved out of a vault is readable plaintext, not ciphertext',
+    movedOutBody === marker, movedOutBody.slice(0, 40));
+
+  // Back in: must be re-encrypted, and still read back correctly.
+  res = await req('/api/move', json({ paths: [`${plainAlbum}/cross.txt`], to: ALBUM }));
+  check('moving back into a vault succeeds', (await res.json()).ok === true);
+
+  res = await req(`/api/file?path=${q(`${ALBUM}/cross.txt`)}`);
+  check('a file moved into a vault still reads back correctly',
+    (await res.text()) === marker);
+
+  res = await req('/api/list?path=' + q(ALBUM));
+  const backIn = (await res.json()).files.find((f) => f.name === 'cross.txt');
+  check('and is genuinely encrypted on disk now',
+    backIn && backIn.size !== marker.length, JSON.stringify(backIn));
+
+  // A locked vault must refuse rather than produce an unreadable result.
+  await req('/api/vaults/lock', json({ path: ALBUM }));
+  res = await req('/api/move', json({ paths: [`${ALBUM}/cross.txt`], to: plainAlbum }));
+  const lockedMove = await res.json();
+  check('moving out of a locked vault is refused, not silently broken',
+    lockedMove.ok === false && /unlock/i.test(lockedMove.failures?.[0]?.error || ''),
+    JSON.stringify(lockedMove));
+  await req('/api/vaults/unlock', json({ path: ALBUM, passphrase: PASSPHRASE }));
+
+  // --- meta reports the plaintext size --------------------------------------
+
+  res = await req(`/api/meta?path=${q(`${ALBUM}/cross.txt`)}`);
+  const metaBody = await res.json();
+  check('meta reports the plaintext size for an encrypted file',
+    metaBody.size === marker.length, `${metaBody.size} vs ${marker.length}`);
+  check('meta marks the file as encrypted', metaBody.encrypted === true);
+
+  // --- zip contains readable files, not blobs -------------------------------
+
+  res = await req('/api/zip-prepare', json({ paths: [`${ALBUM}/cross.txt`] }));
+  const zipJob2 = await res.json();
+  res = await req(zipJob2.url);
+  const zipBytes2 = Buffer.from(await res.arrayBuffer());
+  check('a zip of vault files is produced', zipBytes2.length > 0 && zipBytes2.subarray(0, 2).toString() === 'PK');
+  check('the zip holds decrypted content, not the vault envelope',
+    !zipBytes2.includes(Buffer.from('LSVAULT1')));
+  check('and the plaintext really is in there (stored, not deflated)',
+    zipBytes2.includes(Buffer.from(marker)));
+
+  // --- deleting keeps a vault file inside its vault -------------------------
+
+  res = await req('/api/delete', json({ paths: [`${ALBUM}/cross.txt`] }));
+  check('deleting from a vault succeeds', (await res.json()).ok === true);
+  res = await req('/api/list?path=' + q(ALBUM));
+  const afterDelete = await res.json();
+  check('the deleted file is gone from the album',
+    !afterDelete.files.some((f) => f.name === 'cross.txt'));
+  check('and its trash did not leak into the album listing',
+    !afterDelete.folders.some((f) => f.name === '.trash'), JSON.stringify(afterDelete.folders));
+
+  await req('/api/delete', json({ paths: [plainAlbum] }));
+
   // --- ordinary albums are untouched ---------------------------------------
 
   res = await req('/api/mkdir', json({ path: '/', name: `Plain-${RUN}` }));
