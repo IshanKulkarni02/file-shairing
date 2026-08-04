@@ -82,6 +82,16 @@
       <rect x="2.5" y="4" width="19" height="16" rx="2.5"/>
       <path d="M7 4v16M17 4v16M2.5 12h19M2.5 8h4.5M2.5 16h4.5M17 8h4.5M17 16h4.5"/>
     </g>
+    <g id="i-lock" fill="none" stroke="currentColor" stroke-width="2.25"
+       stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/>
+      <path d="M7.75 10.5V7a4.25 4.25 0 0 1 8.5 0v3.5"/>
+    </g>
+    <g id="i-unlock" fill="none" stroke="currentColor" stroke-width="2.25"
+       stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/>
+      <path d="M7.75 10.5V7a4.25 4.25 0 0 1 8.1-1.8"/>
+    </g>
   </defs>
 </svg>
 
@@ -114,6 +124,14 @@
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg>
       New album
     </button>
+    <button class="btn btn--ghost" id="newVaultBtn">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-lock"/></svg>
+      New vault
+    </button>
+    <button class="btn btn--ghost" id="lockVaultBtn" hidden>
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-lock"/></svg>
+      Lock this album
+    </button>
 
     <div class="toolbar__spacer"></div>
 
@@ -125,6 +143,26 @@
       <option value="largest">Largest first</option>
     </select>
   </div>
+
+  <!-- Shown instead of the grid when the current album is a locked vault. -->
+  <section class="locked" id="lockedSection" hidden>
+    <div class="locked__blob" aria-hidden="true">
+      <svg class="icon" viewBox="0 0 24 24"><use href="#i-lock"/></svg>
+    </div>
+    <h2>This album is locked</h2>
+    <p id="lockedNote">Enter its passphrase to see what is inside.</p>
+
+    <form id="unlockForm" class="locked__form">
+      <label class="sr-only" for="unlockSecret">Passphrase</label>
+      <input class="field__input" id="unlockSecret" type="password"
+             autocomplete="current-password" placeholder="Passphrase">
+      <p class="field__error" id="unlockError" role="alert"></p>
+      <button class="btn btn--primary btn--full" type="submit" id="unlockBtn">Unlock</button>
+      <button class="btn btn--ghost btn--full" type="button" id="useRecoveryBtn">
+        Use a recovery code instead
+      </button>
+    </form>
+  </section>
 
   <section id="albumsSection" hidden>
     <h2 class="section-title">

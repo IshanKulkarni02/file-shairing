@@ -140,8 +140,18 @@ try {
 
   // --- unlocking ------------------------------------------------------------
 
+  // 403, deliberately not 401. Every client treats 401 as "your session
+  // expired" — the web gallery redirects to the login page on any 401 — so
+  // returning it here would sign someone out of the entire app for fumbling
+  // one passphrase field. Caught by clicking through the real UI, where
+  // exactly that happened.
   res = await req('/api/vaults/unlock', json({ path: ALBUM, passphrase: 'wrong one entirely' }));
-  check('a wrong passphrase does not unlock', res.status === 401, `got ${res.status}`);
+  check('a wrong passphrase does not unlock', res.status === 403, `got ${res.status}`);
+  check('a wrong passphrase is never 401 (that would log the client out)',
+    res.status !== 401, `got ${res.status}`);
+
+  res = await req('/api/vaults/unlock', json({ path: ALBUM, recoveryCode: 'AAAA-BBBB-CCCC' }));
+  check('a bad recovery code is also 403, not 401', res.status === 403, `got ${res.status}`);
 
   res = await req(`/api/file?path=${q(filePath)}`);
   check('still locked after a failed attempt', res.status === 423, `got ${res.status}`);

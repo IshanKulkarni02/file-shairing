@@ -10,6 +10,8 @@ const state = {
   selected: new Set(),
   sort: localStorage.getItem('lanshare.sort') || 'newest',
   viewerIndex: -1,
+  // The vault covering the current folder, if any: { path, type, locked }.
+  vault: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -150,7 +152,10 @@ function buildTile(file, index) {
   tile.dataset.path = file.path;
   tile.style.animationDelay = `${Math.min(index, 12) * 40}ms`;
 
-  const hasThumb = file.kind === 'image' || file.kind === 'video';
+  // An end-to-end vault's contents are ciphertext to the server, so there is
+  // no thumbnail to ask for — requesting one would only produce a guaranteed
+  // 409 per tile. Show the generic icon straight away instead.
+  const hasThumb = (file.kind === 'image' || file.kind === 'video') && !file.e2e;
 
   if (hasThumb) {
     const img = document.createElement('img');
@@ -251,6 +256,23 @@ async function loadDuration(file, badge) {
 function render() {
   renderCrumbs();
 
+  const isLocked = Boolean(state.vault?.locked);
+
+  // A locked vault replaces the whole grid with the unlock prompt. There is
+  // nothing to show — the server does not send names, let alone contents.
+  $('lockedSection').hidden = !isLocked;
+  if (isLocked) {
+    $('albumsSection').hidden = true;
+    $('mediaSection').hidden = true;
+    $('empty').hidden = true;
+    $('lockedNote').textContent = state.vault.type === 'e2e'
+      ? 'This album is end-to-end encrypted. Enter its passphrase to unlock it in this browser.'
+      : 'Enter its passphrase to see what is inside.';
+    $('unlockError').classList.remove('is-shown');
+    syncVaultToolbar();
+    return;
+  }
+
   const albumsSection = $('albumsSection');
   const albums = $('albums');
   albums.textContent = '';
@@ -260,12 +282,21 @@ function render() {
     $('albumCount').textContent = state.folders.length;
     state.folders.forEach((folder, index) => {
       const btn = document.createElement('button');
-      btn.className = 'album';
+      btn.className = `album${folder.vault ? ' album--vault' : ''}`;
       btn.style.animation = `tile-in .54s var(--ease-out) ${Math.min(index, 8) * 60}ms both`;
+      const iconId = folder.vault
+        ? (folder.vault.locked ? '#i-lock' : '#i-unlock')
+        : '#i-folder';
       btn.innerHTML = `
-        <span class="album__icon"><svg class="icon" viewBox="0 0 24 24"><use href="#i-folder"/></svg></span>
-        <span class="album__name"></span>`;
+        <span class="album__icon"><svg class="icon" viewBox="0 0 24 24"><use href="${iconId}"/></svg></span>
+        <span>
+          <span class="album__name"></span>
+          <span class="album__state"></span>
+        </span>`;
       btn.querySelector('.album__name').textContent = folder.name;
+      btn.querySelector('.album__state').textContent = folder.vault
+        ? (folder.vault.locked ? 'Locked' : 'Unlocked')
+        : '';
       btn.addEventListener('click', () => navigate(folder.path));
       albums.append(btn);
     });
@@ -290,7 +321,20 @@ function render() {
   }
 
   $('empty').hidden = Boolean(state.folders.length || state.files.length);
+  syncVaultToolbar();
   syncSelectionUi();
+}
+
+/**
+ * "New vault" only makes sense in a folder that is not already inside one —
+ * a vault within a vault is legal but confusing to offer by default. "Lock"
+ * only makes sense when there is something unlocked to lock.
+ */
+function syncVaultToolbar() {
+  const inVault = Boolean(state.vault);
+  $('newVaultBtn').hidden = inVault;
+  $('newAlbumBtn').hidden = Boolean(state.vault?.locked);
+  $('lockVaultBtn').hidden = !(inVault && !state.vault.locked);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +347,7 @@ async function navigate(path, { push = true } = {}) {
     state.path = data.path;
     state.folders = data.folders;
     state.files = data.files;
+    state.vault = data.vault || null;
     state.selected.clear();
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -753,6 +798,101 @@ $('newAlbumBtn').addEventListener('click', async () => {
     await navigate(state.path, { push: false });
   } catch (err) {
     toast(err.message, 'bad');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Vaults
+// ---------------------------------------------------------------------------
+
+/**
+ * Creating the album and encrypting it is one action rather than two,
+ * because only an empty album can become a vault — offering "encrypt this
+ * album" on an album you have already filled would just produce an error.
+ */
+$('newVaultBtn').addEventListener('click', async () => {
+  const name = prompt('Name this encrypted album');
+  if (!name) return;
+
+  const passphrase = prompt(
+    'Choose a passphrase for this vault.\n\n'
+    + 'This is not your login password, and it is not stored anywhere. '
+    + 'If you lose it, the contents cannot be recovered.',
+  );
+  if (!passphrase) return;
+  if (passphrase.length < 8) {
+    toast('That passphrase is too short — use at least 8 characters', 'bad');
+    return;
+  }
+  if (prompt('Type the passphrase again to confirm') !== passphrase) {
+    toast('Those did not match — nothing was created', 'bad');
+    return;
+  }
+
+  try {
+    await postJson('/api/mkdir', { path: state.path, name });
+    const albumPath = state.path === '/' ? `/${name}` : `${state.path}/${name}`;
+    await postJson('/api/vaults/create', { path: albumPath, passphrase });
+    toast('Encrypted album created', 'good');
+    await navigate(albumPath);
+  } catch (err) {
+    toast(err.message, 'bad');
+    // The album may have been created before encryption failed; refresh so
+    // the view matches reality rather than showing a folder that is not there
+    // or hiding one that is.
+    await navigate(state.path, { push: false });
+  }
+});
+
+$('lockVaultBtn').addEventListener('click', async () => {
+  if (!state.vault) return;
+  try {
+    await postJson('/api/vaults/lock', { path: state.vault.path });
+    toast('Locked', 'good');
+    await navigate(state.path, { push: false });
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+});
+
+let unlockWithRecovery = false;
+
+$('useRecoveryBtn').addEventListener('click', () => {
+  unlockWithRecovery = !unlockWithRecovery;
+  const field = $('unlockSecret');
+  field.value = '';
+  field.type = unlockWithRecovery ? 'text' : 'password';
+  field.placeholder = unlockWithRecovery ? 'Recovery code' : 'Passphrase';
+  field.autocomplete = unlockWithRecovery ? 'off' : 'current-password';
+  $('useRecoveryBtn').textContent = unlockWithRecovery
+    ? 'Use a passphrase instead'
+    : 'Use a recovery code instead';
+  field.focus();
+});
+
+$('unlockForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const errorEl = $('unlockError');
+  errorEl.classList.remove('is-shown');
+
+  const secret = $('unlockSecret').value;
+  if (!secret) return;
+
+  $('unlockBtn').disabled = true;
+  try {
+    await postJson('/api/vaults/unlock', {
+      path: state.vault.path,
+      ...(unlockWithRecovery ? { recoveryCode: secret } : { passphrase: secret }),
+    });
+    $('unlockSecret').value = '';
+    toast('Unlocked', 'good');
+    await navigate(state.path, { push: false });
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.classList.add('is-shown');
+    $('unlockSecret').select();
+  } finally {
+    $('unlockBtn').disabled = false;
   }
 });
 
