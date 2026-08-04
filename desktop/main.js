@@ -47,22 +47,42 @@ let serverHandle = null;
 // always exiting.
 let quitting = false;
 
-async function startServer() {
+// Every start/stop/restart queues onto this instead of running immediately.
+// Without it, two operations landing close together — Settings saving a new
+// port at the same moment a Library move finishes and restarts the server —
+// could each see serverHandle as null and both call serverApp.start(config),
+// racing to bind the same port twice. Public start/stop go through this;
+// restartServer and the library:move handler use the *Impl functions
+// directly so their own stop-then-start sequence is one atomic entry in the
+// queue rather than two entries another operation could land between.
+let serverOpChain = Promise.resolve();
+function serialize(fn) {
+  const result = serverOpChain.then(fn, fn);
+  serverOpChain = result.catch(() => {});
+  return result;
+}
+
+async function startServerImpl() {
   if (serverHandle) return serverHandle;
   serverHandle = await serverApp.start(config);
   return serverHandle;
 }
 
-async function stopServer() {
+async function stopServerImpl() {
   if (!serverHandle) return;
   await serverHandle.stop();
   serverHandle = null;
 }
 
-async function restartServer() {
-  const wasRunning = Boolean(serverHandle);
-  await stopServer();
-  if (wasRunning) await startServer();
+const startServer = () => serialize(startServerImpl);
+const stopServer = () => serialize(stopServerImpl);
+
+function restartServer() {
+  return serialize(async () => {
+    const wasRunning = Boolean(serverHandle);
+    await stopServerImpl();
+    if (wasRunning) await startServerImpl();
+  });
 }
 
 /** Where the library actually is right now, whether or not the server is running. */
@@ -236,8 +256,11 @@ ipcMain.handle('accounts:create', guarded((event, input) =>
 
 ipcMain.handle('accounts:update', guarded((event, username, patch) => {
   const updated = accounts.update(config, username, patch);
-  // Mirrors the HTTP route in lib/server-app.js: a disabled account must not
-  // keep working on a session it already has, not just fail future logins.
+  // Mirrors the HTTP route in lib/server-app.js: requireAuth already re-reads
+  // account.disabled fresh from config.users on every request, so this is
+  // cleanup for the Devices list, not what actually blocks access. See the
+  // longer comment on the equivalent HTTP route for why a role demotion
+  // deliberately does not revoke.
   if (patch?.disabled === true) sessions.revokeAllForUser(username);
   return { account: updated };
 }));
@@ -270,9 +293,9 @@ ipcMain.handle('library:stats', async () => {
 ipcMain.handle('library:clearCache', () => library.clearThumbnailCache(libraryPath()));
 ipcMain.handle('library:emptyTrash', () => library.emptyTrash(libraryPath()));
 
-ipcMain.handle('library:move', guarded(async (event, { newPath, mode }) => {
+ipcMain.handle('library:move', guarded((event, { newPath, mode }) => serialize(async () => {
   const wasRunning = Boolean(serverHandle);
-  await stopServer();
+  await stopServerImpl();
   try {
     const result = await library.moveLibrary(libraryPath(), newPath, mode);
     config.library = path.resolve(newPath);
@@ -282,11 +305,11 @@ ipcMain.handle('library:move', guarded(async (event, { newPath, mode }) => {
     // Whether the move succeeded or failed, the server should end up running
     // again if it was running before — a failed move must not leave the
     // library offline on top of not having moved.
-    if (wasRunning) await startServer();
+    if (wasRunning) await startServerImpl();
     refreshTrayMenu();
     notifyRenderer();
   }
-}));
+})));
 
 // --- settings --------------------------------------------------------------
 

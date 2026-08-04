@@ -156,6 +156,22 @@ try {
   check('scoped account cannot reach a sibling album via a relative path',
     res.status === 400, `got ${res.status}`);
 
+  // A root typed with a trailing slash — an entirely ordinary thing to type,
+  // not a hostile input — must not lock the account out of that very root.
+  // resolveSafe() never returns a trailing slash for the folder itself, so a
+  // root stored as "/Family/" would otherwise never match "/Family".
+  res = await createAccount(`trailing-${RUN}`, 'viewer', [`${familyAlbum}/`]);
+  check('creating an account with a trailing-slash root succeeds', res.status === 200, `got ${res.status}`);
+  const trailingBody = await res.json();
+  check('the trailing slash is normalized away in storage',
+    trailingBody.account?.roots?.[0] === familyAlbum, JSON.stringify(trailingBody));
+
+  const trailingSlashAcct = client();
+  await login(trailingSlashAcct, `trailing-${RUN}`, 'Testpass123');
+  res = await trailingSlashAcct(`/api/list?path=${encodeURIComponent(familyAlbum)}`);
+  check('an account with a trailing-slash root can access that root folder',
+    res.status === 200, `got ${res.status}`);
+
   // --- revocation ------------------------------------------------------------
 
   res = await admin('/api/sessions');
