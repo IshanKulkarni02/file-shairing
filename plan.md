@@ -108,6 +108,36 @@ port in Settings actually restarts the server, and moving the library
 relocates it, survives the restart, and leaves the server fully working from
 the new location. Not yet tested on macOS/Linux (Phase E).
 
+**Post-hoc audit (2026-08-04):** re-read every Phase A file critically rather
+than just rerunning the already-passing suites, and found real bugs the
+tests hadn't thought to check for:
+
+- A root typed with a trailing slash (`"Family/"` — an ordinary thing to
+  type) locked that account out of its own root folder, since `resolveSafe()`
+  never returns a trailing slash for the folder itself. Fixed by normalizing
+  roots at the point of storage (`normalizeRootPath()` in `lib/paths.js`,
+  matching `resolveSafe()`'s own normalization exactly), not just validating
+  their shape.
+- `sessions.revokeAllForUser()`/`list()` compared usernames case-sensitively
+  while every other comparison in the codebase is case-insensitive —
+  deleting an account via a differently-cased route param left its session
+  record behind. Not an access-control bypass (`requireAuth` independently
+  re-validates the account exists on every request regardless), but a real
+  bookkeeping bug. Fixed to match.
+- `startServer`/`stopServer` in `desktop/main.js` were not serialized — two
+  operations landing close together (Settings saving a port change while a
+  Library move's restart was still in flight) could race to bind the same
+  port twice. Added a minimal `serialize()` queue; confirmed fixed by firing
+  5 concurrent start/stop calls and a settings-update-racing-restart via CDP
+  against the live app — no double-binds, consistent final state, still
+  reachable over real HTTP afterward.
+
+None of these were caught by the original test suites because the tests
+checked behavior I had already thought to check. **Lesson for future
+audits:** rerunning existing tests proves no regression; it does not prove
+absence of bugs the tests were never written to catch. An audit needs to
+re-read the code, not just re-run it.
+
 **Testing note for future sessions:** in this environment, Windows UI
 Automation's accessibility tree can be unreliable against a freshly launched
 packaged (asar-loaded) renderer — it reported an almost-empty tree that looked
