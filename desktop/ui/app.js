@@ -442,6 +442,14 @@ $('settingsForm').addEventListener('submit', async (event) => {
     return;
   }
 
-  await window.lanshare.settings.update(patch);
-  await loadSettings();
+  // A port change restarts the server; disabling the button for the
+  // duration stops a rapid double-submit from mutating settings out from
+  // under an in-flight restart.
+  $('settingsSubmitBtn').disabled = true;
+  try {
+    await window.lanshare.settings.update(patch);
+    await loadSettings();
+  } finally {
+    $('settingsSubmitBtn').disabled = false;
+  }
 });
