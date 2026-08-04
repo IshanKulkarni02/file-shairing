@@ -36,6 +36,7 @@ const ffmpeg = require('../lib/ffmpeg');
 const accounts = require('../lib/accounts');
 const sessions = require('../lib/sessions');
 const library = require('../lib/library');
+const vaults = require('../lib/vaults');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -241,7 +242,9 @@ function guarded(fn) {
     try {
       return { ok: true, ...(await fn(...args)) };
     } catch (err) {
-      if (err instanceof accounts.AccountError || err instanceof library.LibraryError) {
+      if (err instanceof accounts.AccountError
+        || err instanceof library.LibraryError
+        || err instanceof vaults.VaultStateError) {
         return { ok: false, error: err.message };
       }
       throw err;
@@ -310,6 +313,48 @@ ipcMain.handle('library:move', guarded((event, { newPath, mode }) => serialize(a
     notifyRenderer();
   }
 })));
+
+// --- vaults ----------------------------------------------------------------
+// Unlike accounts, these are not simply "the desktop app is trusted". A vault
+// only opens for whoever knows its passphrase — running this app on this
+// machine grants nothing on its own, which is the whole point of a vault
+// that survives the drive being stolen.
+
+function vaultAt(albumPath) {
+  const found = vaults.findVault(libraryPath(), albumPath);
+  if (!found) throw new vaults.VaultStateError('That album is not a vault', 404);
+  return found;
+}
+
+ipcMain.handle('vaults:list', () => vaults.listVaults(libraryPath()));
+
+ipcMain.handle('vaults:unlock', guarded(async (event, { path: albumPath, passphrase, recoveryCode }) => {
+  const found = vaultAt(albumPath);
+  if (recoveryCode) vaults.unlockWithRecoveryCode(found.metadata, recoveryCode);
+  else await vaults.unlockVault(found.metadata, passphrase);
+  return {};
+}));
+
+ipcMain.handle('vaults:lock', guarded((event, albumPath) => {
+  vaults.lockVault(vaultAt(albumPath).metadata.id);
+  return {};
+}));
+
+ipcMain.handle('vaults:keys', guarded((event, albumPath) =>
+  ({ keys: vaults.listKeys(vaultAt(albumPath).metadata) })));
+
+ipcMain.handle('vaults:addKey', guarded(async (event, { path: albumPath, passphrase, label }) => {
+  const found = vaultAt(albumPath);
+  return { keys: await vaults.addPassphrase(found.absDir, found.metadata, { passphrase, label }) };
+}));
+
+ipcMain.handle('vaults:removeKey', guarded(async (event, { path: albumPath, keyId }) => {
+  const found = vaultAt(albumPath);
+  return { keys: await vaults.removePassphrase(found.absDir, found.metadata, keyId) };
+}));
+
+ipcMain.handle('vaults:recoveryCode', guarded((event, albumPath) =>
+  ({ code: vaults.exportRecoveryCode(vaultAt(albumPath).metadata) })));
 
 // --- settings --------------------------------------------------------------
 

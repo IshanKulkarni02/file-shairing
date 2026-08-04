@@ -39,6 +39,7 @@ function shortDevice(userAgent) {
 const panelLoaders = {
   accounts: () => loadAccounts(),
   devices: () => loadDevices(),
+  vaults: () => loadVaults(),
   library: () => loadLibrary(),
   settings: () => loadSettings(),
 };
@@ -316,6 +317,196 @@ async function loadDevices() {
   }
   list.append(wrap);
 }
+
+// ---------------------------------------------------------------------------
+// Vaults
+// ---------------------------------------------------------------------------
+
+let selectedVault = null;
+
+async function loadVaults() {
+  const list = await window.lanshare.vaults.list();
+  const container = $('vaultsList');
+  container.textContent = '';
+
+  if (!list.length) {
+    container.innerHTML = '<p class="empty-note">No encrypted albums yet.<br>'
+      + 'Create one from the gallery on any device: <strong>New vault</strong>.</p>';
+    $('vaultDetail').hidden = true;
+    selectedVault = null;
+    return;
+  }
+
+  // A vault that got locked (or the server restarted) while its detail pane
+  // was open must not keep showing the unlocked view.
+  if (selectedVault && !list.some((v) => v.path === selectedVault.path)) {
+    selectedVault = null;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'row-list';
+
+  for (const vault of list) {
+    const row = document.createElement('div');
+    row.className = `row${selectedVault?.path === vault.path ? ' is-selected' : ''}`;
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <span class="badge"></span>`;
+    row.querySelector('.row__title').textContent = vault.name;
+    row.querySelector('.row__sub').textContent =
+      `${vault.path} · ${vault.keyCount} ${vault.keyCount === 1 ? 'key' : 'keys'}`;
+
+    const badge = row.querySelector('.badge');
+    if (vault.type === 'e2e') {
+      badge.textContent = 'end-to-end';
+      badge.classList.add('badge--e2e');
+    } else {
+      badge.textContent = vault.unlocked ? 'unlocked' : 'locked';
+      badge.classList.add(vault.unlocked ? 'badge--unlocked' : 'badge--locked');
+    }
+
+    row.addEventListener('click', () => {
+      selectedVault = vault;
+      renderVaultDetail();
+      loadVaults();
+    });
+    wrap.append(row);
+  }
+  container.append(wrap);
+
+  if (selectedVault) {
+    // Refresh the selection from the list we just fetched, so lock state in
+    // the detail pane matches reality rather than whatever it was on click.
+    selectedVault = list.find((v) => v.path === selectedVault.path) || null;
+  }
+  renderVaultDetail();
+}
+
+function renderVaultDetail() {
+  const detail = $('vaultDetail');
+  if (!selectedVault) { detail.hidden = true; return; }
+
+  detail.hidden = false;
+  $('vaultDetailName').textContent = selectedVault.name;
+  $('vaultDetailPath').textContent = selectedVault.path;
+  $('vaultUnlockError').classList.remove('is-shown');
+  $('vaultKeyError').classList.remove('is-shown');
+
+  const open = selectedVault.unlocked;
+  $('vaultLockedBox').hidden = open;
+  $('vaultUnlockedBox').hidden = !open;
+
+  // Never leave a recovery code on screen across selections.
+  $('vaultRecoveryCode').hidden = true;
+  $('vaultRecoveryCode').textContent = '';
+  $('vaultCopyRecoveryBtn').hidden = true;
+  $('vaultRecoveryBtn').hidden = false;
+
+  if (open) loadVaultKeys();
+}
+
+async function loadVaultKeys() {
+  const result = await window.lanshare.vaults.keys(selectedVault.path);
+  const container = $('vaultKeysList');
+  container.textContent = '';
+  if (!result.ok) return;
+
+  for (const key of result.keys) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions">
+        <button class="btn btn--sm btn--danger" data-action="remove">Remove</button>
+      </div>`;
+    row.querySelector('.row__title').textContent = key.label || 'Passphrase';
+    row.querySelector('.row__sub').textContent = `added ${new Date(key.created).toLocaleDateString()}`;
+    row.querySelector('[data-action="remove"]').addEventListener('click', async () => {
+      if (!confirm(`Remove "${key.label}"? Anyone using that passphrase will lose access.`)) return;
+      const removed = await window.lanshare.vaults.removeKey(selectedVault.path, key.id);
+      if (!removed.ok) { alert(removed.error); return; }
+      loadVaultKeys();
+      loadVaults();
+    });
+    container.append(row);
+  }
+}
+
+$('vaultUnlockBtn').addEventListener('click', async () => {
+  const secret = $('vaultSecret').value;
+  const errorEl = $('vaultUnlockError');
+  errorEl.classList.remove('is-shown');
+  if (!secret) return;
+
+  $('vaultUnlockBtn').disabled = true;
+  try {
+    const useRecovery = $('vaultUseRecovery').checked;
+    const result = await window.lanshare.vaults.unlock(
+      selectedVault.path,
+      useRecovery ? { recoveryCode: secret } : { passphrase: secret },
+    );
+    if (!result.ok) {
+      errorEl.textContent = result.error;
+      errorEl.classList.add('is-shown');
+      return;
+    }
+    $('vaultSecret').value = '';
+    await loadVaults();
+  } finally {
+    $('vaultUnlockBtn').disabled = false;
+  }
+});
+
+$('vaultLockBtn').addEventListener('click', async () => {
+  await window.lanshare.vaults.lock(selectedVault.path);
+  await loadVaults();
+});
+
+$('vaultAddKeyBtn').addEventListener('click', async () => {
+  const passphrase = $('vaultNewPassphrase').value;
+  const label = $('vaultNewLabel').value.trim() || 'Passphrase';
+  const errorEl = $('vaultKeyError');
+  errorEl.classList.remove('is-shown');
+
+  const result = await window.lanshare.vaults.addKey(selectedVault.path, passphrase, label);
+  if (!result.ok) {
+    errorEl.textContent = result.error;
+    errorEl.classList.add('is-shown');
+    return;
+  }
+  $('vaultNewPassphrase').value = '';
+  $('vaultNewLabel').value = '';
+  loadVaultKeys();
+  loadVaults();
+});
+
+$('vaultRecoveryBtn').addEventListener('click', async () => {
+  if (!confirm(
+    'Show the recovery code for this album?\n\n'
+    + 'Anyone who has it can open this album forever, and it cannot be revoked '
+    + 'without re-encrypting everything in it.',
+  )) return;
+
+  const result = await window.lanshare.vaults.recoveryCode(selectedVault.path);
+  if (!result.ok) { alert(result.error); return; }
+
+  $('vaultRecoveryCode').textContent = result.code;
+  $('vaultRecoveryCode').hidden = false;
+  $('vaultCopyRecoveryBtn').hidden = false;
+  $('vaultRecoveryBtn').hidden = true;
+});
+
+$('vaultCopyRecoveryBtn').addEventListener('click', () => {
+  window.lanshare.copyToClipboard($('vaultRecoveryCode').textContent);
+  $('vaultCopyRecoveryBtn').textContent = 'Copied';
+  setTimeout(() => { $('vaultCopyRecoveryBtn').textContent = 'Copy'; }, 1500);
+});
 
 // ---------------------------------------------------------------------------
 // Library

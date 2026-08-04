@@ -23,6 +23,9 @@
   <button class="nav__item" data-panel="devices">
     <span class="dot">◑</span> Devices
   </button>
+  <button class="nav__item" data-panel="vaults">
+    <span class="dot">◈</span> Vaults
+  </button>
   <button class="nav__item" data-panel="library">
     <span class="dot">◒</span> Library
   </button>
@@ -131,6 +134,66 @@
     <h1>Devices</h1>
     <p class="panel__sub">Every signed-in session, across every account.</p>
     <div class="card" id="devicesList"></div>
+  </section>
+
+  <section class="panel" id="panel-vaults">
+    <h1>Vaults</h1>
+    <p class="panel__sub">Encrypted albums, and who can open them.</p>
+
+    <div class="card" id="vaultsList"></div>
+
+    <div class="card" id="vaultDetail" hidden>
+      <h3 style="font-size:.9rem;margin-bottom:.2rem" id="vaultDetailName"></h3>
+      <p class="panel__sub" style="margin:0 0 .75rem" id="vaultDetailPath"></p>
+
+      <div id="vaultLockedBox">
+        <div class="field">
+          <label class="field__label" for="vaultSecret">Passphrase</label>
+          <input class="field__input" id="vaultSecret" type="password" autocomplete="off">
+        </div>
+        <label class="check-row">
+          <input type="checkbox" id="vaultUseRecovery"> This is a recovery code
+        </label>
+        <p class="field__error" id="vaultUnlockError"></p>
+        <button class="btn btn--primary btn--full" id="vaultUnlockBtn">Unlock</button>
+      </div>
+
+      <div id="vaultUnlockedBox" hidden>
+        <h4 style="font-size:.75rem;text-transform:uppercase;letter-spacing:.03em;color:var(--text-soft);margin:.25rem 0 .5rem">
+          Ways to open this vault
+        </h4>
+        <div class="row-list" id="vaultKeysList"></div>
+
+        <div class="field" style="margin-top:.75rem">
+          <label class="field__label" for="vaultNewPassphrase">Add another passphrase</label>
+          <input class="field__input" id="vaultNewPassphrase" type="password" autocomplete="new-password"
+                 placeholder="At least 8 characters">
+        </div>
+        <div class="field">
+          <label class="field__label" for="vaultNewLabel">Label</label>
+          <input class="field__input" id="vaultNewLabel" placeholder="e.g. Phone, Partner's laptop">
+        </div>
+        <p class="field__error" id="vaultKeyError"></p>
+        <div class="field-row">
+          <button class="btn" id="vaultAddKeyBtn">Add passphrase</button>
+          <button class="btn btn--ghost" id="vaultLockBtn">Lock</button>
+        </div>
+
+        <div class="danger-zone">
+          <h4>Recovery code</h4>
+          <p>
+            Anyone holding this code can open this album forever. It cannot be
+            revoked without re-encrypting everything in it. Write it down
+            somewhere safe rather than leaving it on screen.
+          </p>
+          <div class="recovery-code" id="vaultRecoveryCode" hidden></div>
+          <div class="field-row">
+            <button class="btn btn--ghost" id="vaultRecoveryBtn">Show recovery code</button>
+            <button class="btn btn--ghost" id="vaultCopyRecoveryBtn" hidden>Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section class="panel" id="panel-library">
