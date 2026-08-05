@@ -18,8 +18,8 @@ the internet without port forwarding.
 | — | Web gallery, media pipeline, PWA, single-file exe | **Done** |
 | 0 | Repository workflow | **Done** (PRs pending `gh`, see below) |
 | A | Desktop control panel, accounts, permissions, sessions | **Done** |
-| B | Encrypted vaults | Not started |
-| C | Storage across drives | Not started |
+| B | Encrypted vaults | **Done** |
+| C | Storage across drives | **Done** |
 | D | Sync | Not started |
 | E | macOS and Linux | Not started |
 | F | Client mode — connect to other hosts | Not started |
@@ -55,22 +55,36 @@ Merges into `main` are release decisions and are announced, not silent.
 
 #### One-time setup still needed for real PRs
 
-The GitHub CLI is not installed and `winget install --id GitHub.cli` hangs on
-this machine — it wants an elevation prompt that a non-interactive shell cannot
-answer. Until it is installed, each task still gets its own branch, pushed, and
-merged into `dev` with `--no-ff`, so history and branch structure are identical
-to a squashed PR; the only thing missing is the pull request record on GitHub.
-
-To enable actual PRs, run these once in your own terminal:
+The GitHub CLI **is now installed** (2.97.0). The earlier hang was
+`winget install` waiting on an elevation prompt a non-interactive shell
+cannot answer; `--scope user` avoids it entirely:
 
 ```bash
-winget install --id GitHub.cli
+winget install --id GitHub.cli -e --scope user
+```
+
+It still needs authenticating, which only you can do — it is an interactive
+OAuth flow, and Claude will not ask for or accept a token:
+
+```bash
 gh auth login
 ```
 
-Claude will not ask you for a token and cannot accept one — authentication has
-to happen in your own session. Once `gh auth status` succeeds, the workflow
-switches to `gh pr create` / `gh pr merge` with no other changes.
+Until then, every task still gets its own branch and is pushed, so nothing is
+lost; only the pull request record on GitHub is missing. Once `gh auth status`
+succeeds the workflow switches to `gh pr create` / `gh pr merge` with no other
+changes.
+
+**GitHub achievements** (a stated goal): the workflow already in use earns
+several without gaming anything — **Pull Shark** from merging the stacked
+PRs, **YOLO** from merging without review (already the agreed process), and
+**Quickdraw** from opening an issue and closing it within five minutes. The
+401→403 vault-unlock bug found in Phase B is a legitimate candidate for that
+last one: a real bug, found by real testing, already fixed. Not worth
+chasing: **Pair Extraordinaire** needs a co-author who is a real GitHub
+account (the commit trailer here is a noreply address, and real people should
+not be credited for commits they did not write), and **Starstruck** needs
+genuine stars.
 
 The remote is also still named `file-shairing`. Rename it in GitHub → Settings,
 then `git remote set-url origin <new-url>`.
@@ -95,8 +109,21 @@ prove them. Current suites, all run against a live server:
 | `test/permissions.mjs` | per-role capability, album scoping, session revocation, immediate disable, last-admin lockout protection |
 | `test/migration.mjs` | a pre-roles config.json still signs in and upgrades to admin |
 | `test/library.mjs` | library stats, same-volume rename, a genuine cross-volume move (C:↔D: on this machine), nesting/non-empty-destination refusal with the source left untouched, cache/trash clearing |
+| `test/vaultfile.mjs` | vault file round trips at every chunk boundary, eight byte-range shapes, and tamper detection: wrong key, flipped bit, dropped trailer, lopped-off final chunk, reordered chunks, a chunk grafted in from another file under the same key, altered header |
+| `test/vault.mjs` | envelope encryption, multiple passphrases on one vault, cross-vault key-entry transplant refused, recovery codes, per-file keys, and end-to-end integration with the file format |
+| `test/vaults.mjs` | album vaults: creation refusals, which vault owns a path (including nested), lock/unlock, real auto-lock expiry, key material never reaching disk |
+| `test/vault-routes.mjs` | vaults over HTTP: encrypted upload/download, ranges in plaintext offsets, locked albums revealing nothing, key sharing, and files crossing a vault boundary |
+| `test/e2e-crypto.mjs` | the browser and server crypto implementations agreeing byte-for-byte in both directions |
+| `test/volumes.mjs` | identifying a volume by GUID, surviving a changed drive letter, longest-mount-point matching |
+| `test/locations.mjs` | albums living on other drives: real cross-volume relocation, link removal guards, dangling links, a self-referential link not looping a walk, and a failed bring-home leaving no hidden staging copy |
+| `test/location-routes.mjs` | locations over HTTP: registering a drive, relocating an album, that album still downloading, listing, and accepting uploads on its original path, an unplugged drive surfacing as unreachable rather than empty, and reconnecting needing no repair step |
+| `test/electron-links.js` | link creation and removal **inside an Electron runtime** — run with `npx electron test/electron-links.js`, not Node |
 
-All 6 suites, 143 checks, pass together as of the desktop-screens merge.
+All 15 suites, 432 checks, pass together as of the Phase C merge.
+(`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
+the standard sweep — one needs the HTTPS listener, the other moves a
+gigabyte. `test/electron-links.js` needs an Electron runtime, for the reason
+recorded under Phase C below.)
 
 **Desktop app status:** Electron control panel with five working screens
 (Status, Accounts, Devices, Library, Settings), packaged as a Windows
@@ -149,6 +176,100 @@ which have independently produced misleading results.
 
 ---
 
+## Phase B — encrypted vaults (done)
+
+Both vault types work end to end:
+
+- **Server-unlock vaults** keep every media feature — thumbnails, previews,
+  video scrubbing — because the server can decrypt while unlocked. Vault
+  thumbnails are themselves encrypted at rest, or the cache would be a
+  plaintext gallery of exactly what the vault protects.
+- **End-to-end vaults** are encrypted in the browser; the server holds no key
+  and cannot read them. The cost, stated up front at creation rather than
+  discovered later: no thumbnails, no previews, no video playback — downloads
+  only. `public/vaultcrypto.js` is a second implementation of the same format
+  against WebCrypto, and `test/e2e-crypto.mjs` guards the drift risk by
+  encrypting with each side and decrypting with the other.
+
+**Known limitation, deliberate and recorded:** file names, folder structure,
+sizes and timestamps are not encrypted in either vault type — only contents.
+Someone with a stolen drive can see an album holds `passport-scan.jpg` of
+2.4 MB. Fixing it means opaque on-disk ids plus an encrypted manifest, which
+touches listing, sorting, thumbnails, rename, move and zip — worth doing as
+its own piece rather than half-doing here.
+
+**Audit after the fact found four vault-blind routes**, none caught by the
+then-green suite. The worst: `/api/move` across a vault boundary was silent
+data loss — a file moved out of a vault reported success and left an
+undecryptable blob. Also `/api/zip` archived ciphertext, `/api/meta` reported
+the encrypted size, and `/api/delete` trashed vault files outside the only
+vault that could decrypt them. All fixed with 17 regression tests. **The bugs
+lived in the seam between two well-tested areas** — vault routes and plain
+routes were each covered; nothing covered a file crossing between them. That
+is the second time an audit found what tests could not (see the Phase A note
+above).
+
+A flaw caught while writing the key layer, recorded because it is the kind
+that passes a careless test: the first `unlockWithRecoveryCode` "verified" a
+code by wrapping and then unwrapping a probe with that same key. That always
+succeeds regardless of the key, so it proved nothing — any 32 random bytes
+would have appeared to unlock the vault and then failed incomprehensibly on
+the first file. A recovery code *is* the master key, so there is nothing to
+unwrap to prove it; vaults now store a `check` blob (a known value encrypted
+under the master key at creation) and codes are verified against that.
+
+---
+
+## Phase C — storage across drives (done)
+
+An album can live on another drive while keeping its place in the library.
+
+**How it works.** The album's contents move to the other drive and a
+**directory junction** takes its place in the library (a symlink on
+macOS/Linux). Everything above the filesystem — listing, download, upload,
+thumbnails, vaults, zip — keeps working on the original path with no changes,
+because as far as those routes are concerned nothing moved. Junctions need no
+administrator rights on Windows, which was verified before the design was
+built on them.
+
+Drives are tracked by **volume GUID, not drive letter**, so an external disk
+that comes back as `F:` instead of `E:` is still recognised. `repairLinks()`
+runs at startup and repoints any album whose drive moved; it logs what it
+repaired and what is still broken, and never prevents startup.
+
+The move itself is copy → verify bytes and file count → remove the source →
+create the link, and it rolls back if the link cannot be created. Bringing an
+album home is the same in reverse. Google Drive needs no integration: with
+Drive for Desktop installed, `G:\…` is just another location, and encrypted
+albums arrive there already encrypted.
+
+**Three bugs found by testing the wiring rather than the parts**, all with
+every existing suite green:
+
+- `/api/list` used `entry.isDirectory()`, which is **false for a junction** —
+  a relocated album was listed as a *file*, and one on an unplugged drive
+  vanished from the listing altogether. Now it asks the resolved stat, and an
+  unreachable album is still listed and marked unreachable, which is the whole
+  point of tracking where it went. `locations:albums` in the desktop app had
+  the identical blind spot, which hid exactly the albums the screen exists to
+  bring back.
+- **`fs.rmSync` on a junction works under Node and throws `EISDIR` under
+  Electron** (its asar shim stats through the link). Bringing an album home
+  therefore passed every HTTP test and failed in the actual desktop app. Fixed
+  to `rmdirSync` on Windows / `unlinkSync` on POSIX, which behave the same in
+  both runtimes. **This is why `test/electron-links.js` exists and runs under
+  Electron** — a Node-hosted test cannot see this class of bug, and the
+  desktop app is the only place this code really runs.
+- A failed bring-home left its `.incoming-*` staging folder behind — a full
+  hidden duplicate of the album, invisible in the gallery. Now cleaned up and
+  relinked on any failure, with an injected-failure test.
+
+The renderer had a matching gap: an IPC rejection left the status note on
+"Copying…" forever with nothing saying why. Both directions now surface the
+error.
+
+---
+
 ## Decisions and why
 
 Recorded so they are not relitigated or quietly reversed.
@@ -173,6 +294,11 @@ Recorded so they are not relitigated or quietly reversed.
 | Cannot disable, demote or delete the last enabled admin | Otherwise there would be nobody left with permission to undo the mistake |
 | Encrypted albums sync as ciphertext | Never decrypting to copy is what makes a lost drive or a cloud copy safe |
 | Two-way sync compares **three** states | Without a baseline snapshot, "deleted here" and "added there" are indistinguishable and deleted files come back |
+| A random vault master key, wrapped per passphrase — never derived from one | Lets one vault hold several passphrases and recovery codes as list entries, so granting or rotating access never re-encrypts the album |
+| Chunk AAD binds header hash + index + end-of-file flag | Independent chunks are the point of the format and also its danger: without this, chunks could be reordered, grafted in from another file under the same key, or the file truncated, and every remaining chunk would still authenticate |
+| Plaintext length in an encrypted trailer, not the header | The length is unknown until an upload finishes streaming, by which point the header is already sealed into every chunk's AAD. At the end, it also makes truncation-to-zero-chunks detectable rather than looking like an empty file |
+| Per-file keys, not one key per vault | Restarts the chunk nonce counter safely for every file |
+| Vault stores a `check` blob | A recovery code *is* the master key, so nothing unwraps to prove it. Without a stored verifier, any 32 random bytes appear to unlock the vault and fail later on the first file |
 
 ---
 

@@ -353,6 +353,21 @@ img, video { max-width: 100%; display: block; }
   color: var(--cocoa);
   flex: none;
 }
+
+/* A vault reads as a different kind of thing at a glance, not just a folder
+   with a badge bolted on. */
+.album--vault .album__icon {
+  background: linear-gradient(150deg, #B9A6F5, #8E77E8);
+  color: #fff;
+}
+.album__state {
+  font-size: .6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--text-soft);
+  margin-top: .1rem;
+}
 .album__name {
   font-weight: 600;
   overflow: hidden;
@@ -510,6 +525,33 @@ img, video { max-width: 100%; display: block; }
 /* -------------------------------------------------------------------------
    Empty state
    ------------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------
+   Locked vault
+   ------------------------------------------------------------------------- */
+
+.locked {
+  text-align: center;
+  padding: clamp(2.5rem, 7vw, 4rem) 1.5rem;
+  background: var(--surface);
+  border-radius: var(--r-md);
+  box-shadow: var(--lift-1);
+}
+.locked__blob {
+  width: 110px; height: 110px;
+  margin: 0 auto 1.5rem;
+  border-radius: 44% 56% 60% 40% / 55% 44% 56% 45%;
+  background: linear-gradient(150deg, #B9A6F5, #8E77E8);
+  display: grid; place-items: center;
+  color: #fff;
+  box-shadow: var(--lift-2);
+  animation: blob-wobble 8s ease-in-out infinite;
+}
+.locked__blob .icon { width: 3rem; height: 3rem; }
+.locked h2 { margin-bottom: .5rem; }
+.locked p { color: var(--text-soft); margin: 0 auto 1.75rem; max-width: 42ch; }
+.locked__form { max-width: 320px; margin: 0 auto; display: grid; gap: .625rem; }
+.btn--full { width: 100%; }
 
 .empty {
   text-align: center;

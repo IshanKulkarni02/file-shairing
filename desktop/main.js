@@ -10,6 +10,7 @@
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, clipboard } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const QRCode = require('qrcode');
 
 // app.getName() falls back to a generic "Electron" unless this is set
@@ -36,6 +37,8 @@ const ffmpeg = require('../lib/ffmpeg');
 const accounts = require('../lib/accounts');
 const sessions = require('../lib/sessions');
 const library = require('../lib/library');
+const vaults = require('../lib/vaults');
+const locations = require('../lib/locations');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -241,7 +244,10 @@ function guarded(fn) {
     try {
       return { ok: true, ...(await fn(...args)) };
     } catch (err) {
-      if (err instanceof accounts.AccountError || err instanceof library.LibraryError) {
+      if (err instanceof accounts.AccountError
+        || err instanceof library.LibraryError
+        || err instanceof vaults.VaultStateError
+        || err instanceof locations.LocationError) {
         return { ok: false, error: err.message };
       }
       throw err;
@@ -310,6 +316,92 @@ ipcMain.handle('library:move', guarded((event, { newPath, mode }) => serialize(a
     notifyRenderer();
   }
 })));
+
+// --- vaults ----------------------------------------------------------------
+// Unlike accounts, these are not simply "the desktop app is trusted". A vault
+// only opens for whoever knows its passphrase — running this app on this
+// machine grants nothing on its own, which is the whole point of a vault
+// that survives the drive being stolen.
+
+function vaultAt(albumPath) {
+  const found = vaults.findVault(libraryPath(), albumPath);
+  if (!found) throw new vaults.VaultStateError('That album is not a vault', 404);
+  return found;
+}
+
+ipcMain.handle('vaults:list', () => vaults.listVaults(libraryPath()));
+
+ipcMain.handle('vaults:unlock', guarded(async (event, { path: albumPath, passphrase, recoveryCode }) => {
+  const found = vaultAt(albumPath);
+  if (recoveryCode) vaults.unlockWithRecoveryCode(found.metadata, recoveryCode);
+  else await vaults.unlockVault(found.metadata, passphrase);
+  return {};
+}));
+
+ipcMain.handle('vaults:lock', guarded((event, albumPath) => {
+  vaults.lockVault(vaultAt(albumPath).metadata.id);
+  return {};
+}));
+
+ipcMain.handle('vaults:keys', guarded((event, albumPath) =>
+  ({ keys: vaults.listKeys(vaultAt(albumPath).metadata) })));
+
+ipcMain.handle('vaults:addKey', guarded(async (event, { path: albumPath, passphrase, label }) => {
+  const found = vaultAt(albumPath);
+  return { keys: await vaults.addPassphrase(found.absDir, found.metadata, { passphrase, label }) };
+}));
+
+ipcMain.handle('vaults:removeKey', guarded(async (event, { path: albumPath, keyId }) => {
+  const found = vaultAt(albumPath);
+  return { keys: await vaults.removePassphrase(found.absDir, found.metadata, keyId) };
+}));
+
+ipcMain.handle('vaults:recoveryCode', guarded((event, albumPath) =>
+  ({ code: vaults.exportRecoveryCode(vaultAt(albumPath).metadata) })));
+
+// --- storage locations -----------------------------------------------------
+
+ipcMain.handle('locations:list', () => locations.list(config).map((loc) => ({
+  ...loc,
+  albums: locations.albumsOn(libraryPath(), config, loc.id).map((a) => a.name),
+})));
+
+ipcMain.handle('locations:add', guarded((event, { label, path: target }) => {
+  const added = locations.add(config, { label, targetPath: target });
+  configLib.save(config);
+  return { location: added };
+}));
+
+ipcMain.handle('locations:remove', guarded((event, id) => {
+  locations.remove(config, libraryPath(), id);
+  configLib.save(config);
+  return {};
+}));
+
+/** Top-level albums, with whether each already lives on another drive. */
+ipcMain.handle('locations:albums', () => {
+  const lib = libraryPath();
+  let entries;
+  try {
+    entries = fs.readdirSync(lib, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => !e.name.startsWith('.'))
+    .map((e) => ({ entry: e, album: locations.describeAlbum(lib, config, e.name) }))
+    // A relocated album is a junction, which the dirent reports as a symlink
+    // and not a directory. Filtering on isDirectory() alone would hide exactly
+    // the albums this screen exists to bring back.
+    .filter(({ entry, album }) => album.linked || entry.isDirectory())
+    .map(({ album }) => album);
+});
+
+ipcMain.handle('locations:relocate', guarded(async (event, { album, locationId }) =>
+  ({ result: await locations.relocateAlbum(libraryPath(), config, album, locationId) })));
+
+ipcMain.handle('locations:bringHome', guarded(async (event, album) =>
+  ({ result: await locations.bringAlbumHome(libraryPath(), config, album) })));
 
 // --- settings --------------------------------------------------------------
 

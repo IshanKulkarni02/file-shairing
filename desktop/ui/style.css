@@ -335,3 +335,43 @@ button { font: inherit; color: inherit; cursor: pointer; border: none; backgroun
 }
 .stat__value { font-family: var(--font-display); font-weight: 700; font-size: 1rem; }
 .stat__label { font-size: .625rem; color: var(--text-soft); text-transform: uppercase; letter-spacing: .02em; margin-top: .15rem; }
+
+/* -------------------------------------------------------------------------
+   Vaults
+   ------------------------------------------------------------------------- */
+
+.badge--locked { background: #8E77E8; color: #fff; }
+.badge--unlocked { background: var(--grass); color: var(--cocoa); }
+.badge--e2e { background: var(--cocoa); color: #fff; }
+
+.row.is-selected { background: var(--surface-2); border-radius: 10px; }
+
+/* Set apart visually, because everything in it is irreversible. */
+.danger-zone {
+  margin-top: 1rem;
+  padding: .75rem .85rem;
+  border: 2px solid color-mix(in srgb, var(--coral) 45%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--coral) 8%, transparent);
+}
+.danger-zone h4 {
+  margin: 0 0 .3rem;
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+.danger-zone p { margin: 0 0 .6rem; font-size: .75rem; color: var(--text-soft); line-height: 1.5; }
+
+.recovery-code {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: .8125rem;
+  font-weight: 700;
+  line-height: 1.6;
+  word-break: break-all;
+  padding: .6rem .7rem;
+  background: var(--surface);
+  border-radius: 10px;
+  margin-bottom: .6rem;
+  -webkit-user-select: text;
+  user-select: text;
+}

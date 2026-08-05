@@ -39,6 +39,25 @@ contextBridge.exposeInMainWorld('lanshare', {
     move: (newPath, mode) => invoke('library:move', { newPath, mode }),
   },
 
+  locations: {
+    list: () => invoke('locations:list'),
+    add: (label, path) => invoke('locations:add', { label, path }),
+    remove: (id) => invoke('locations:remove', id),
+    albums: () => invoke('locations:albums'),
+    relocate: (album, locationId) => invoke('locations:relocate', { album, locationId }),
+    bringHome: (album) => invoke('locations:bringHome', album),
+  },
+
+  vaults: {
+    list: () => invoke('vaults:list'),
+    unlock: (path, secret) => invoke('vaults:unlock', { path, ...secret }),
+    lock: (path) => invoke('vaults:lock', path),
+    keys: (path) => invoke('vaults:keys', path),
+    addKey: (path, passphrase, label) => invoke('vaults:addKey', { path, passphrase, label }),
+    removeKey: (path, keyId) => invoke('vaults:removeKey', { path, keyId }),
+    recoveryCode: (path) => invoke('vaults:recoveryCode', path),
+  },
+
   settings: {
     get: () => invoke('settings:get'),
     update: (patch) => invoke('settings:update', patch),

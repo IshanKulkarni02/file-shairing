@@ -39,6 +39,7 @@ function shortDevice(userAgent) {
 const panelLoaders = {
   accounts: () => loadAccounts(),
   devices: () => loadDevices(),
+  vaults: () => loadVaults(),
   library: () => loadLibrary(),
   settings: () => loadSettings(),
 };
@@ -318,10 +319,374 @@ async function loadDevices() {
 }
 
 // ---------------------------------------------------------------------------
+// Vaults
+// ---------------------------------------------------------------------------
+
+let selectedVault = null;
+
+async function loadVaults() {
+  const list = await window.lanshare.vaults.list();
+  const container = $('vaultsList');
+  container.textContent = '';
+
+  if (!list.length) {
+    container.innerHTML = '<p class="empty-note">No encrypted albums yet.<br>'
+      + 'Create one from the gallery on any device: <strong>New vault</strong>.</p>';
+    $('vaultDetail').hidden = true;
+    selectedVault = null;
+    return;
+  }
+
+  // A vault that got locked (or the server restarted) while its detail pane
+  // was open must not keep showing the unlocked view.
+  if (selectedVault && !list.some((v) => v.path === selectedVault.path)) {
+    selectedVault = null;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'row-list';
+
+  for (const vault of list) {
+    const row = document.createElement('div');
+    row.className = `row${selectedVault?.path === vault.path ? ' is-selected' : ''}`;
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <span class="badge"></span>`;
+    row.querySelector('.row__title').textContent = vault.name;
+    row.querySelector('.row__sub').textContent =
+      `${vault.path} · ${vault.keyCount} ${vault.keyCount === 1 ? 'key' : 'keys'}`;
+
+    const badge = row.querySelector('.badge');
+    if (vault.type === 'e2e') {
+      badge.textContent = 'end-to-end';
+      badge.classList.add('badge--e2e');
+    } else {
+      badge.textContent = vault.unlocked ? 'unlocked' : 'locked';
+      badge.classList.add(vault.unlocked ? 'badge--unlocked' : 'badge--locked');
+    }
+
+    row.addEventListener('click', () => {
+      selectedVault = vault;
+      renderVaultDetail();
+      loadVaults();
+    });
+    wrap.append(row);
+  }
+  container.append(wrap);
+
+  if (selectedVault) {
+    // Refresh the selection from the list we just fetched, so lock state in
+    // the detail pane matches reality rather than whatever it was on click.
+    selectedVault = list.find((v) => v.path === selectedVault.path) || null;
+  }
+  renderVaultDetail();
+}
+
+function renderVaultDetail() {
+  const detail = $('vaultDetail');
+  if (!selectedVault) { detail.hidden = true; return; }
+
+  detail.hidden = false;
+  $('vaultDetailName').textContent = selectedVault.name;
+  $('vaultDetailPath').textContent = selectedVault.path;
+  $('vaultUnlockError').classList.remove('is-shown');
+  $('vaultKeyError').classList.remove('is-shown');
+
+  const open = selectedVault.unlocked;
+  $('vaultLockedBox').hidden = open;
+  $('vaultUnlockedBox').hidden = !open;
+
+  // Never leave a recovery code on screen across selections.
+  $('vaultRecoveryCode').hidden = true;
+  $('vaultRecoveryCode').textContent = '';
+  $('vaultCopyRecoveryBtn').hidden = true;
+  $('vaultRecoveryBtn').hidden = false;
+
+  if (open) loadVaultKeys();
+}
+
+async function loadVaultKeys() {
+  const result = await window.lanshare.vaults.keys(selectedVault.path);
+  const container = $('vaultKeysList');
+  container.textContent = '';
+  if (!result.ok) return;
+
+  for (const key of result.keys) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions">
+        <button class="btn btn--sm btn--danger" data-action="remove">Remove</button>
+      </div>`;
+    row.querySelector('.row__title').textContent = key.label || 'Passphrase';
+    row.querySelector('.row__sub').textContent = `added ${new Date(key.created).toLocaleDateString()}`;
+    row.querySelector('[data-action="remove"]').addEventListener('click', async () => {
+      if (!confirm(`Remove "${key.label}"? Anyone using that passphrase will lose access.`)) return;
+      const removed = await window.lanshare.vaults.removeKey(selectedVault.path, key.id);
+      if (!removed.ok) { alert(removed.error); return; }
+      loadVaultKeys();
+      loadVaults();
+    });
+    container.append(row);
+  }
+}
+
+$('vaultUnlockBtn').addEventListener('click', async () => {
+  const secret = $('vaultSecret').value;
+  const errorEl = $('vaultUnlockError');
+  errorEl.classList.remove('is-shown');
+  if (!secret) return;
+
+  $('vaultUnlockBtn').disabled = true;
+  try {
+    const useRecovery = $('vaultUseRecovery').checked;
+    const result = await window.lanshare.vaults.unlock(
+      selectedVault.path,
+      useRecovery ? { recoveryCode: secret } : { passphrase: secret },
+    );
+    if (!result.ok) {
+      errorEl.textContent = result.error;
+      errorEl.classList.add('is-shown');
+      return;
+    }
+    $('vaultSecret').value = '';
+    await loadVaults();
+  } finally {
+    $('vaultUnlockBtn').disabled = false;
+  }
+});
+
+$('vaultLockBtn').addEventListener('click', async () => {
+  await window.lanshare.vaults.lock(selectedVault.path);
+  await loadVaults();
+});
+
+$('vaultAddKeyBtn').addEventListener('click', async () => {
+  const passphrase = $('vaultNewPassphrase').value;
+  const label = $('vaultNewLabel').value.trim() || 'Passphrase';
+  const errorEl = $('vaultKeyError');
+  errorEl.classList.remove('is-shown');
+
+  const result = await window.lanshare.vaults.addKey(selectedVault.path, passphrase, label);
+  if (!result.ok) {
+    errorEl.textContent = result.error;
+    errorEl.classList.add('is-shown');
+    return;
+  }
+  $('vaultNewPassphrase').value = '';
+  $('vaultNewLabel').value = '';
+  loadVaultKeys();
+  loadVaults();
+});
+
+$('vaultRecoveryBtn').addEventListener('click', async () => {
+  if (!confirm(
+    'Show the recovery code for this album?\n\n'
+    + 'Anyone who has it can open this album forever, and it cannot be revoked '
+    + 'without re-encrypting everything in it.',
+  )) return;
+
+  const result = await window.lanshare.vaults.recoveryCode(selectedVault.path);
+  if (!result.ok) { alert(result.error); return; }
+
+  $('vaultRecoveryCode').textContent = result.code;
+  $('vaultRecoveryCode').hidden = false;
+  $('vaultCopyRecoveryBtn').hidden = false;
+  $('vaultRecoveryBtn').hidden = true;
+});
+
+$('vaultCopyRecoveryBtn').addEventListener('click', () => {
+  window.lanshare.copyToClipboard($('vaultRecoveryCode').textContent);
+  $('vaultCopyRecoveryBtn').textContent = 'Copied';
+  setTimeout(() => { $('vaultCopyRecoveryBtn').textContent = 'Copy'; }, 1500);
+});
+
+// ---------------------------------------------------------------------------
 // Library
 // ---------------------------------------------------------------------------
 
+async function loadLocations() {
+  const list = await window.lanshare.locations.list();
+  const container = $('locationsList');
+  container.textContent = '';
+
+  if (!list.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">No other drives added yet.</p>';
+  } else {
+    for (const loc of list) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `
+        <div class="row__main">
+          <div class="row__title"></div>
+          <div class="row__sub"></div>
+        </div>
+        <span class="badge"></span>
+        <div class="row__actions">
+          <button class="btn btn--sm btn--danger" data-action="remove">Remove</button>
+        </div>`;
+      row.querySelector('.row__title').textContent = loc.label;
+      row.querySelector('.row__sub').textContent = loc.attached
+        ? `${loc.path}${loc.albums.length ? ` · ${loc.albums.length} album${loc.albums.length === 1 ? '' : 's'}` : ''}`
+        : `not connected · last seen at ${loc.recordedPath}`;
+
+      const badge = row.querySelector('.badge');
+      badge.textContent = loc.attached ? 'connected' : 'offline';
+      badge.classList.add(loc.attached ? 'badge--unlocked' : 'badge--locked');
+
+      row.querySelector('[data-action="remove"]').addEventListener('click', async () => {
+        const result = await window.lanshare.locations.remove(loc.id);
+        if (!result.ok) { alert(result.error); return; }
+        loadLocations();
+        loadRelocatable();
+      });
+      container.append(row);
+    }
+  }
+
+  // Moving an album anywhere requires somewhere connected to move it to.
+  const connected = list.filter((l) => l.attached);
+  $('relocateBox').hidden = connected.length === 0;
+  if (connected.length) loadRelocatable(connected);
+}
+
+async function loadRelocatable(connected) {
+  const drives = connected || (await window.lanshare.locations.list()).filter((l) => l.attached);
+  const albums = await window.lanshare.locations.albums();
+  const container = $('albumsList');
+  container.textContent = '';
+
+  if (!albums.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">No albums yet.</p>';
+    return;
+  }
+
+  for (const album of albums) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions"></div>`;
+    row.querySelector('.row__title').textContent = album.name;
+
+    const actions = row.querySelector('.row__actions');
+
+    if (album.linked) {
+      row.querySelector('.row__sub').textContent = album.reachable
+        ? `on ${album.location?.label || 'another drive'}`
+        : `on ${album.location?.label || 'another drive'} — not connected`;
+
+      const back = document.createElement('button');
+      back.className = 'btn btn--sm';
+      back.textContent = 'Bring back';
+      // Copying from a drive that is not attached is not possible; saying so
+      // beats letting someone click and wait for a failure.
+      back.disabled = !album.reachable;
+      back.addEventListener('click', () => runRelocation(
+        `Bring "${album.name}" back into the library?\n\nIts files will be copied back, which can take a while.`,
+        () => window.lanshare.locations.bringHome(album.name),
+      ));
+      actions.append(back);
+    } else {
+      row.querySelector('.row__sub').textContent = 'in the library';
+
+      const select = document.createElement('select');
+      select.className = 'field__input';
+      select.style.cssText = 'width:auto;padding:4px 8px;font-size:.6875rem';
+      select.innerHTML = '<option value="">Move to…</option>'
+        + drives.map((d) => `<option value="${d.id}"></option>`).join('');
+      // Set label text separately rather than interpolating it into markup.
+      drives.forEach((d, i) => { select.options[i + 1].textContent = d.label; });
+
+      select.addEventListener('change', () => {
+        if (!select.value) return;
+        const drive = drives.find((d) => d.id === select.value);
+        const chosen = select.value;
+        select.value = '';
+        runRelocation(
+          `Move "${album.name}" to ${drive.label}?\n\nIts files are copied there and verified before anything is removed. `
+          + 'The album keeps working exactly as it does now on every device.',
+          () => window.lanshare.locations.relocate(album.name, chosen),
+        );
+      });
+      actions.append(select);
+    }
+    container.append(row);
+  }
+}
+
+/** Both directions copy an entire album, so both need the same guard rails. */
+async function runRelocation(confirmText, action) {
+  if (!confirm(confirmText)) return;
+
+  const note = $('relocateNote');
+  note.textContent = 'Copying — this can take a while for a large album. Do not close LANShare.';
+  // Disabling the whole list is blunt, but a second relocation started while
+  // the first is mid-copy would be operating on files that are moving.
+  $('albumsList').style.pointerEvents = 'none';
+  $('albumsList').style.opacity = '0.5';
+
+  try {
+    const result = await action();
+    note.textContent = result.ok ? 'Done.' : '';
+    if (!result.ok) alert(result.error);
+  } catch (err) {
+    // An unexpected failure in the main process rejects the invoke rather than
+    // returning { ok: false }. Without this the note sits on "Copying…" for
+    // the rest of the session and nothing ever says why.
+    note.textContent = '';
+    alert(`The move did not finish: ${err.message}`);
+  } finally {
+    $('albumsList').style.pointerEvents = '';
+    $('albumsList').style.opacity = '';
+    await loadLocations();
+    await loadLibrary();
+  }
+}
+
+$('browseLocationBtn').addEventListener('click', async () => {
+  const picked = await window.lanshare.pickFolder();
+  if (!picked) return;
+  $('newLocationPath').value = picked;
+  // Suggest the folder's own name, since that is usually what someone would
+  // have typed anyway.
+  if (!$('newLocationLabel').value) {
+    $('newLocationLabel').value = picked.split(/[\\/]/).filter(Boolean).pop() || '';
+  }
+  $('addLocationBtn').disabled = false;
+});
+
+$('addLocationBtn').addEventListener('click', async () => {
+  const errorEl = $('locationError');
+  errorEl.classList.remove('is-shown');
+
+  const result = await window.lanshare.locations.add(
+    $('newLocationLabel').value.trim(),
+    $('newLocationPath').value,
+  );
+  if (!result.ok) {
+    errorEl.textContent = result.error;
+    errorEl.classList.add('is-shown');
+    return;
+  }
+  $('newLocationPath').value = '';
+  $('newLocationLabel').value = '';
+  $('addLocationBtn').disabled = true;
+  await loadLocations();
+});
+
 async function loadLibrary() {
+  await loadLocations();
   const stats = await window.lanshare.library.stats();
   $('libStatsPath').textContent = stats.path;
 
