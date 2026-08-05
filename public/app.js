@@ -14,6 +14,18 @@ const state = {
   vault: null,
 };
 
+/**
+ * Master keys for end-to-end vaults, held in this tab's memory only.
+ *
+ * The server has no key for these albums and never will, so unlocking them
+ * happens here. Deliberately not sessionStorage or localStorage: a key that
+ * outlives the tab is a key sitting on disk in the browser profile, which
+ * would undo most of the point. Closing the tab locks the album.
+ */
+const e2eKeys = new Map(); // vault album path -> Uint8Array master key
+
+const hasWebCrypto = () => Boolean(window.LanShareVault?.available);
+
 const $ = (id) => document.getElementById(id);
 const q = encodeURIComponent;
 
@@ -212,8 +224,12 @@ function buildTile(file, index) {
   tile.append(check);
 
   tile.addEventListener('click', () => {
-    if (state.selected.size) toggleSelect(file.path);
-    else openViewer(state.files.indexOf(file));
+    if (state.selected.size) { toggleSelect(file.path); return; }
+    // Nothing on the server can render a preview of an end-to-end file, so
+    // opening the viewer would show a broken frame. Downloading and
+    // decrypting here is the only thing that can actually work.
+    if (file.e2e) { downloadE2eFile(file); return; }
+    openViewer(state.files.indexOf(file));
   });
 
   // Long-press on a phone starts selection, matching the Photos app.
@@ -256,6 +272,13 @@ async function loadDuration(file, badge) {
 function render() {
   renderCrumbs();
 
+  // For an end-to-end album the server cannot know whether it is unlocked —
+  // it holds no key. Only this tab does, so lock state for those is decided
+  // here.
+  if (state.vault?.type === 'e2e') {
+    state.vault.locked = !e2eKeys.has(state.vault.path);
+  }
+
   const isLocked = Boolean(state.vault?.locked);
 
   // A locked vault replaces the whole grid with the unlock prompt. There is
@@ -265,6 +288,11 @@ function render() {
     $('albumsSection').hidden = true;
     $('mediaSection').hidden = true;
     $('empty').hidden = true;
+    // Empty them rather than only hiding them. Whatever was on screen before
+    // belongs to a different album, and leaving it parked in a hidden
+    // container is how it ends up flashing back into view later.
+    $('mosaic').textContent = '';
+    $('albums').textContent = '';
     $('lockedNote').textContent = state.vault.type === 'e2e'
       ? 'This album is end-to-end encrypted. Enter its passphrase to unlock it in this browser.'
       : 'Enter its passphrase to see what is inside.';
@@ -333,6 +361,10 @@ function render() {
 function syncVaultToolbar() {
   const inVault = Boolean(state.vault);
   $('newVaultBtn').hidden = inVault;
+  // A private album needs WebCrypto, which browsers only expose in a secure
+  // context — so over plain HTTP on a LAN address this is genuinely
+  // unavailable, and offering it would only produce a confusing failure.
+  $('newE2eVaultBtn').hidden = inVault || !hasWebCrypto();
   $('newAlbumBtn').hidden = Boolean(state.vault?.locked);
   $('lockVaultBtn').hidden = !(inVault && !state.vault.locked);
 }
@@ -659,13 +691,40 @@ function pump() {
   }
 }
 
-function uploadOne({ file, relPath, row }) {
-  return new Promise((resolve) => {
-    const fill = row.querySelector('.upitem__fill');
-    const stat = row.querySelector('.upitem__stat');
+async function uploadOne({ file, relPath, row }) {
+  const fill = row.querySelector('.upitem__fill');
+  const stat = row.querySelector('.upitem__stat');
 
+  // Into an end-to-end album, encrypt here first. What leaves this browser
+  // is already ciphertext; the server stores it untouched and could not
+  // decrypt it if it wanted to.
+  let payload = file;
+  if (state.vault?.type === 'e2e') {
+    const key = e2eKeyFor(state.vault.path);
+    if (!key) {
+      row.classList.add('is-error');
+      stat.textContent = 'album is locked';
+      return;
+    }
+    try {
+      stat.textContent = 'encrypting…';
+      const plaintext = new Uint8Array(await file.arrayBuffer());
+      const ciphertext = await window.LanShareVault.encryptFile(plaintext, key);
+      payload = new Blob([ciphertext]);
+    } catch (err) {
+      row.classList.add('is-error');
+      stat.textContent = `encryption failed: ${err.message}`;
+      return;
+    }
+  }
+
+  return sendUpload({ payload, file, relPath, row, fill, stat });
+}
+
+function sendUpload({ payload, file, relPath, row, fill, stat }) {
+  return new Promise((resolve) => {
     const form = new FormData();
-    form.append('file', file, file.name);
+    form.append('file', payload, file.name);
 
     const xhr = new XMLHttpRequest();
     // XHR rather than fetch: only XHR reports upload progress.
@@ -844,10 +903,62 @@ $('newVaultBtn').addEventListener('click', async () => {
   }
 });
 
+/**
+ * A private (end-to-end) vault. The passphrase never leaves this browser
+ * and the server never receives a key, so it genuinely cannot read the
+ * contents — at the cost of no thumbnails, no previews and no video
+ * streaming for that album. The prompt says so before anything is created.
+ */
+$('newE2eVaultBtn').addEventListener('click', async () => {
+  if (!hasWebCrypto()) {
+    toast('This browser cannot create private albums (no WebCrypto)', 'bad');
+    return;
+  }
+
+  const name = prompt('Name this private album');
+  if (!name) return;
+
+  const passphrase = prompt(
+    'Choose a passphrase for this private album.\n\n'
+    + 'It never leaves this browser. The server cannot read these files at all, '
+    + 'which also means no thumbnails, no previews and no video playback for '
+    + 'this album — only downloads.\n\n'
+    + 'If you lose the passphrase, nobody can recover the contents.',
+  );
+  if (!passphrase) return;
+  if (passphrase.length < 8) {
+    toast('That passphrase is too short — use at least 8 characters', 'bad');
+    return;
+  }
+  if (prompt('Type the passphrase again to confirm') !== passphrase) {
+    toast('Those did not match — nothing was created', 'bad');
+    return;
+  }
+
+  try {
+    await postJson('/api/mkdir', { path: state.path, name });
+    const albumPath = state.path === '/' ? `/${name}` : `${state.path}/${name}`;
+    await postJson('/api/vaults/create', { path: albumPath, passphrase, type: 'e2e' });
+    // Unlock it here so the person can use it straight away, exactly as a
+    // server-side vault starts unlocked after creation.
+    await unlockE2eVault(albumPath, passphrase, false);
+    toast('Private album created', 'good');
+    await navigate(albumPath);
+  } catch (err) {
+    toast(err.message, 'bad');
+    await navigate(state.path, { push: false });
+  }
+});
+
 $('lockVaultBtn').addEventListener('click', async () => {
   if (!state.vault) return;
   try {
-    await postJson('/api/vaults/lock', { path: state.vault.path });
+    if (state.vault.type === 'e2e') {
+      // Nothing server-side to lock — the key only ever existed here.
+      e2eKeys.delete(state.vault.path);
+    } else {
+      await postJson('/api/vaults/lock', { path: state.vault.path });
+    }
     toast('Locked', 'good');
     await navigate(state.path, { push: false });
   } catch (err) {
@@ -880,10 +991,16 @@ $('unlockForm').addEventListener('submit', async (event) => {
 
   $('unlockBtn').disabled = true;
   try {
-    await postJson('/api/vaults/unlock', {
-      path: state.vault.path,
-      ...(unlockWithRecovery ? { recoveryCode: secret } : { passphrase: secret }),
-    });
+    if (state.vault.type === 'e2e') {
+      // The server cannot help here — it has no key. Fetch the wrapped
+      // metadata and do the whole unlock in this tab.
+      await unlockE2eVault(state.vault.path, secret, unlockWithRecovery);
+    } else {
+      await postJson('/api/vaults/unlock', {
+        path: state.vault.path,
+        ...(unlockWithRecovery ? { recoveryCode: secret } : { passphrase: secret }),
+      });
+    }
     $('unlockSecret').value = '';
     toast('Unlocked', 'good');
     await navigate(state.path, { push: false });
@@ -895,6 +1012,91 @@ $('unlockForm').addEventListener('submit', async (event) => {
     $('unlockBtn').disabled = false;
   }
 });
+
+// ---------------------------------------------------------------------------
+// End-to-end vaults: everything below happens in this browser, never on the
+// server, because for these albums the server has no key at all.
+// ---------------------------------------------------------------------------
+
+async function unlockE2eVault(albumPath, secret, isRecoveryCode) {
+  if (!hasWebCrypto()) {
+    throw new Error('This browser cannot open private albums (no WebCrypto). Try a modern browser over HTTPS.');
+  }
+
+  const { metadata } = await api(`/api/vaults/metadata?path=${q(albumPath)}`);
+  const V = window.LanShareVault;
+
+  let masterKey;
+  if (isRecoveryCode) {
+    masterKey = parseRecoveryCodeInBrowser(secret);
+    await V.verifyMasterKey(metadata, masterKey);
+  } else {
+    masterKey = await V.unlockVault(metadata, secret);
+  }
+
+  e2eKeys.set(albumPath, masterKey);
+}
+
+/**
+ * Crockford base32, matching lib/crypto/vault.js — including its tolerance
+ * for the characters that alphabet leaves out, mapped to what someone
+ * writing the code down clearly meant.
+ */
+function parseRecoveryCodeInBrowser(code) {
+  const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  const clean = String(code || '').toUpperCase().replace(/[\s-]/g, '')
+    .replace(/O/g, '0').replace(/[IL]/g, '1').replace(/U/g, 'V');
+
+  let bits = 0;
+  let value = 0;
+  const out = [];
+  for (const ch of clean) {
+    const index = ALPHABET.indexOf(ch);
+    if (index === -1) throw new Error('That recovery code contains invalid characters');
+    value = (value << 5) | index;
+    bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  const bytes = new Uint8Array(out);
+  if (bytes.length !== 32) throw new Error('That recovery code is not the right length');
+  return bytes;
+}
+
+/** The in-memory key for whichever end-to-end vault covers this path. */
+function e2eKeyFor(albumPath) {
+  return e2eKeys.get(albumPath) || null;
+}
+
+/**
+ * Download and decrypt an end-to-end file, then hand it to the browser as a
+ * normal download. These albums are deliberately download-only: with no key
+ * server-side there are no thumbnails, no previews and no video streaming,
+ * which is the cost of the server genuinely not being able to read them.
+ */
+async function downloadE2eFile(file) {
+  const key = e2eKeyFor(state.vault.path);
+  if (!key) { toast('Unlock this album first', 'bad'); return; }
+
+  toast('Decrypting…');
+  try {
+    const res = await fetch(`/api/file?path=${q(file.path)}`);
+    if (!res.ok) throw new Error(`Could not fetch the file (${res.status})`);
+    const ciphertext = new Uint8Array(await res.arrayBuffer());
+    const plaintext = await window.LanShareVault.decryptFile(ciphertext, key);
+
+    const url = URL.createObjectURL(new Blob([plaintext]));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = file.name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Revoking immediately can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
 
 $('sort').addEventListener('change', (event) => {
   state.sort = event.target.value;
