@@ -18,7 +18,7 @@ the internet without port forwarding.
 | — | Web gallery, media pipeline, PWA, single-file exe | **Done** |
 | 0 | Repository workflow | **Done** (PRs pending `gh`, see below) |
 | A | Desktop control panel, accounts, permissions, sessions | **Done** |
-| B | Encrypted vaults | Crypto core done (file format + keys); wiring into albums/routes/UI remaining |
+| B | Encrypted vaults | **Done** |
 | C | Storage across drives | Not started |
 | D | Sync | Not started |
 | E | macOS and Linux | Not started |
@@ -55,22 +55,36 @@ Merges into `main` are release decisions and are announced, not silent.
 
 #### One-time setup still needed for real PRs
 
-The GitHub CLI is not installed and `winget install --id GitHub.cli` hangs on
-this machine — it wants an elevation prompt that a non-interactive shell cannot
-answer. Until it is installed, each task still gets its own branch, pushed, and
-merged into `dev` with `--no-ff`, so history and branch structure are identical
-to a squashed PR; the only thing missing is the pull request record on GitHub.
-
-To enable actual PRs, run these once in your own terminal:
+The GitHub CLI **is now installed** (2.97.0). The earlier hang was
+`winget install` waiting on an elevation prompt a non-interactive shell
+cannot answer; `--scope user` avoids it entirely:
 
 ```bash
-winget install --id GitHub.cli
+winget install --id GitHub.cli -e --scope user
+```
+
+It still needs authenticating, which only you can do — it is an interactive
+OAuth flow, and Claude will not ask for or accept a token:
+
+```bash
 gh auth login
 ```
 
-Claude will not ask you for a token and cannot accept one — authentication has
-to happen in your own session. Once `gh auth status` succeeds, the workflow
-switches to `gh pr create` / `gh pr merge` with no other changes.
+Until then, every task still gets its own branch and is pushed, so nothing is
+lost; only the pull request record on GitHub is missing. Once `gh auth status`
+succeeds the workflow switches to `gh pr create` / `gh pr merge` with no other
+changes.
+
+**GitHub achievements** (a stated goal): the workflow already in use earns
+several without gaming anything — **Pull Shark** from merging the stacked
+PRs, **YOLO** from merging without review (already the agreed process), and
+**Quickdraw** from opening an issue and closing it within five minutes. The
+401→403 vault-unlock bug found in Phase B is a legitimate candidate for that
+last one: a real bug, found by real testing, already fixed. Not worth
+chasing: **Pair Extraordinaire** needs a co-author who is a real GitHub
+account (the commit trailer here is a noreply address, and real people should
+not be credited for commits they did not write), and **Starstruck** needs
+genuine stars.
 
 The remote is also still named `file-shairing`. Rename it in GitHub → Settings,
 then `git remote set-url origin <new-url>`.
@@ -97,8 +111,14 @@ prove them. Current suites, all run against a live server:
 | `test/library.mjs` | library stats, same-volume rename, a genuine cross-volume move (C:↔D: on this machine), nesting/non-empty-destination refusal with the source left untouched, cache/trash clearing |
 | `test/vaultfile.mjs` | vault file round trips at every chunk boundary, eight byte-range shapes, and tamper detection: wrong key, flipped bit, dropped trailer, lopped-off final chunk, reordered chunks, a chunk grafted in from another file under the same key, altered header |
 | `test/vault.mjs` | envelope encryption, multiple passphrases on one vault, cross-vault key-entry transplant refused, recovery codes, per-file keys, and end-to-end integration with the file format |
+| `test/vaults.mjs` | album vaults: creation refusals, which vault owns a path (including nested), lock/unlock, real auto-lock expiry, key material never reaching disk |
+| `test/vault-routes.mjs` | vaults over HTTP: encrypted upload/download, ranges in plaintext offsets, locked albums revealing nothing, key sharing, and files crossing a vault boundary |
+| `test/e2e-crypto.mjs` | the browser and server crypto implementations agreeing byte-for-byte in both directions |
 
-All 6 suites, 143 checks, pass together as of the desktop-screens merge.
+All 10 suites, 317 checks, pass together as of the end-to-end vault merge.
+(`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
+the standard sweep — one needs the HTTPS listener, the other moves a
+gigabyte.)
 
 **Desktop app status:** Electron control panel with five working screens
 (Status, Accounts, Devices, Library, Settings), packaged as a Windows
@@ -151,10 +171,38 @@ which have independently produced misleading results.
 
 ---
 
-## Phase B progress
+## Phase B — encrypted vaults (done)
 
-**Crypto core done** — `lib/crypto/vaultfile.js` (the on-disk format) and
-`lib/crypto/vault.js` (keys), 57 tests between them.
+Both vault types work end to end:
+
+- **Server-unlock vaults** keep every media feature — thumbnails, previews,
+  video scrubbing — because the server can decrypt while unlocked. Vault
+  thumbnails are themselves encrypted at rest, or the cache would be a
+  plaintext gallery of exactly what the vault protects.
+- **End-to-end vaults** are encrypted in the browser; the server holds no key
+  and cannot read them. The cost, stated up front at creation rather than
+  discovered later: no thumbnails, no previews, no video playback — downloads
+  only. `public/vaultcrypto.js` is a second implementation of the same format
+  against WebCrypto, and `test/e2e-crypto.mjs` guards the drift risk by
+  encrypting with each side and decrypting with the other.
+
+**Known limitation, deliberate and recorded:** file names, folder structure,
+sizes and timestamps are not encrypted in either vault type — only contents.
+Someone with a stolen drive can see an album holds `passport-scan.jpg` of
+2.4 MB. Fixing it means opaque on-disk ids plus an encrypted manifest, which
+touches listing, sorting, thumbnails, rename, move and zip — worth doing as
+its own piece rather than half-doing here.
+
+**Audit after the fact found four vault-blind routes**, none caught by the
+then-green suite. The worst: `/api/move` across a vault boundary was silent
+data loss — a file moved out of a vault reported success and left an
+undecryptable blob. Also `/api/zip` archived ciphertext, `/api/meta` reported
+the encrypted size, and `/api/delete` trashed vault files outside the only
+vault that could decrypt them. All fixed with 17 regression tests. **The bugs
+lived in the seam between two well-tested areas** — vault routes and plain
+routes were each covered; nothing covered a file crossing between them. That
+is the second time an audit found what tests could not (see the Phase A note
+above).
 
 A flaw caught while writing the key layer, recorded because it is the kind
 that passes a careless test: the first `unlockWithRecoveryCode` "verified" a
@@ -165,11 +213,14 @@ the first file. A recovery code *is* the master key, so there is nothing to
 unwrap to prove it; vaults now store a `check` blob (a known value encrypted
 under the master key at creation) and codes are verified against that.
 
-**Still to do in Phase B:** marking an album as a vault and storing its
-metadata alongside it, wiring encryption into the upload path and decryption
-into the download/stream/thumbnail paths, encrypting the thumbnail cache for
-vault contents, the end-to-end (browser-side) vault type, and the desktop UI
-for creating vaults and exporting keys.
+A flaw caught while writing the key layer, recorded because it is the kind
+that passes a careless test: the first `unlockWithRecoveryCode` "verified" a
+code by wrapping and then unwrapping a probe with that same key. That always
+succeeds regardless of the key, so it proved nothing — any 32 random bytes
+would have appeared to unlock the vault and then failed incomprehensibly on
+the first file. A recovery code *is* the master key, so there is nothing to
+unwrap to prove it; vaults now store a `check` blob (a known value encrypted
+under the master key at creation) and codes are verified against that.
 
 ---
 
