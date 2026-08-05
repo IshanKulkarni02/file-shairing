@@ -305,16 +305,40 @@ function render() {
   const albums = $('albums');
   albums.textContent = '';
 
+  /**
+   * The line under an album's name. Both facts can be true at once, and a
+   * locked album on a disconnected drive needs both said, because unlocking
+   * it would not help.
+   */
+  function albumState(folder) {
+    const parts = [];
+    if (folder.vault) parts.push(folder.vault.locked ? 'Locked' : 'Unlocked');
+    if (folder.storage) {
+      if (!folder.storage.reachable) parts.push('Drive not connected');
+      else if (folder.storage.location) parts.push(`On ${folder.storage.location}`);
+      else parts.push('On another drive');
+    }
+    return parts.join(' · ');
+  }
+
   if (state.folders.length) {
     albumsSection.hidden = false;
     $('albumCount').textContent = state.folders.length;
     state.folders.forEach((folder, index) => {
+      // An album can be both a vault and stored elsewhere. Locked says more
+      // about what you can do with it right now, so it wins the icon; being
+      // away is then said in words underneath.
+      const away = folder.storage;
+      const unreachable = Boolean(away && !away.reachable);
+
       const btn = document.createElement('button');
-      btn.className = `album${folder.vault ? ' album--vault' : ''}`;
+      btn.className = `album${folder.vault ? ' album--vault' : ''}${unreachable ? ' album--away' : ''}`;
       btn.style.animation = `tile-in .54s var(--ease-out) ${Math.min(index, 8) * 60}ms both`;
-      const iconId = folder.vault
-        ? (folder.vault.locked ? '#i-lock' : '#i-unlock')
-        : '#i-folder';
+
+      let iconId = '#i-folder';
+      if (folder.vault) iconId = folder.vault.locked ? '#i-lock' : '#i-unlock';
+      else if (away) iconId = away.reachable ? '#i-drive' : '#i-drive-off';
+
       btn.innerHTML = `
         <span class="album__icon"><svg class="icon" viewBox="0 0 24 24"><use href="${iconId}"/></svg></span>
         <span>
@@ -322,10 +346,19 @@ function render() {
           <span class="album__state"></span>
         </span>`;
       btn.querySelector('.album__name').textContent = folder.name;
-      btn.querySelector('.album__state').textContent = folder.vault
-        ? (folder.vault.locked ? 'Locked' : 'Unlocked')
-        : '';
-      btn.addEventListener('click', () => navigate(folder.path));
+      btn.querySelector('.album__state').textContent = albumState(folder);
+
+      if (unreachable) {
+        // Opening it would show an empty album and imply the photos are gone.
+        // Naming the drive turns that into something the owner can act on.
+        btn.addEventListener('click', () => {
+          toast(away.location
+            ? `${folder.name} is stored on ${away.location}. Connect that drive to open it.`
+            : `${folder.name} is stored on a drive that is not connected.`);
+        });
+      } else {
+        btn.addEventListener('click', () => navigate(folder.path));
+      }
       albums.append(btn);
     });
   } else {

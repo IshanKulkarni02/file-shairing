@@ -6,7 +6,9 @@
  * library is only useful when it reflects what is actually on the server.
  */
 
-const VERSION = 'v1';
+// Bump whenever the shell changes, or an installed PWA keeps serving the old
+// index.html and app.js out of its own cache.
+const VERSION = 'v2';
 const SHELL_CACHE = `lanshare-shell-${VERSION}`;
 const THUMB_CACHE = `lanshare-thumbs-${VERSION}`;
 const MAX_THUMBS = 600;

@@ -360,6 +360,21 @@ img, video { max-width: 100%; display: block; }
   background: linear-gradient(150deg, #B9A6F5, #8E77E8);
   color: #fff;
 }
+
+/* An album whose drive is not connected. It stays visible and legible — the
+   photos are safe, they are just not here right now — but it should not
+   invite a click the way an openable album does.
+
+   Dimming the children rather than the tile itself is deliberate: the tile
+   carries the `tile-in` entry animation, whose `both` fill mode holds
+   opacity: 1 and would override any opacity set here. */
+.album--away .album__icon {
+  background: linear-gradient(150deg, #E4DAD2, #C9BAAE);
+  opacity: .75;
+}
+.album--away .album__name { color: var(--text-soft); }
+.album--away:hover { transform: none; box-shadow: var(--lift-1); }
+.album--away:active { transform: none; }
 .album__state {
   font-size: .6875rem;
   font-weight: 700;
