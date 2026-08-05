@@ -10,6 +10,7 @@
 
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, clipboard } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const QRCode = require('qrcode');
 
 // app.getName() falls back to a generic "Electron" unless this is set
@@ -37,6 +38,7 @@ const accounts = require('../lib/accounts');
 const sessions = require('../lib/sessions');
 const library = require('../lib/library');
 const vaults = require('../lib/vaults');
+const locations = require('../lib/locations');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -244,7 +246,8 @@ function guarded(fn) {
     } catch (err) {
       if (err instanceof accounts.AccountError
         || err instanceof library.LibraryError
-        || err instanceof vaults.VaultStateError) {
+        || err instanceof vaults.VaultStateError
+        || err instanceof locations.LocationError) {
         return { ok: false, error: err.message };
       }
       throw err;
@@ -355,6 +358,50 @@ ipcMain.handle('vaults:removeKey', guarded(async (event, { path: albumPath, keyI
 
 ipcMain.handle('vaults:recoveryCode', guarded((event, albumPath) =>
   ({ code: vaults.exportRecoveryCode(vaultAt(albumPath).metadata) })));
+
+// --- storage locations -----------------------------------------------------
+
+ipcMain.handle('locations:list', () => locations.list(config).map((loc) => ({
+  ...loc,
+  albums: locations.albumsOn(libraryPath(), config, loc.id).map((a) => a.name),
+})));
+
+ipcMain.handle('locations:add', guarded((event, { label, path: target }) => {
+  const added = locations.add(config, { label, targetPath: target });
+  configLib.save(config);
+  return { location: added };
+}));
+
+ipcMain.handle('locations:remove', guarded((event, id) => {
+  locations.remove(config, libraryPath(), id);
+  configLib.save(config);
+  return {};
+}));
+
+/** Top-level albums, with whether each already lives on another drive. */
+ipcMain.handle('locations:albums', () => {
+  const lib = libraryPath();
+  let entries;
+  try {
+    entries = fs.readdirSync(lib, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((e) => !e.name.startsWith('.'))
+    .map((e) => ({ entry: e, album: locations.describeAlbum(lib, config, e.name) }))
+    // A relocated album is a junction, which the dirent reports as a symlink
+    // and not a directory. Filtering on isDirectory() alone would hide exactly
+    // the albums this screen exists to bring back.
+    .filter(({ entry, album }) => album.linked || entry.isDirectory())
+    .map(({ album }) => album);
+});
+
+ipcMain.handle('locations:relocate', guarded(async (event, { album, locationId }) =>
+  ({ result: await locations.relocateAlbum(libraryPath(), config, album, locationId) })));
+
+ipcMain.handle('locations:bringHome', guarded(async (event, album) =>
+  ({ result: await locations.bringAlbumHome(libraryPath(), config, album) })));
 
 // --- settings --------------------------------------------------------------
 

@@ -195,6 +195,52 @@ try {
   const repair = locations.repairLinks(danglingLib, config);
   check('repair reports the broken link rather than throwing',
     repair.broken.some((b) => b.name === 'Ghost'), JSON.stringify(repair));
+
+  // --- a failed bring-home leaves nothing behind ---------------------------
+  // Bringing an album home copies it into a hidden staging folder first. If
+  // the swap then fails, that copy is as large as the album and invisible in
+  // the gallery, so it has to be cleaned up rather than abandoned.
+
+  const failBase = tempDir('lanshare-failhome-');
+  const failLib = path.join(failBase, 'library');
+  const failDrive = path.join(failBase, 'drive');
+  mkdirSync(failLib);
+  mkdirSync(failDrive);
+  makeAlbum(path.join(failLib, 'Trip'));
+
+  const failConfig = {};
+  const failLoc = locations.add(failConfig, { label: 'Fail Drive', targetPath: failDrive });
+  await locations.relocateAlbum(failLib, failConfig, 'Trip', failLoc.id);
+
+  const [firstFile, firstContent] = Object.entries(ALBUM_FILES)[0];
+  const fs = require('fs');
+  const realRmdir = fs.rmdirSync;
+  const realUnlink = fs.unlinkSync;
+  fs.rmdirSync = () => { throw new Error('injected failure'); };
+  fs.unlinkSync = () => { throw new Error('injected failure'); };
+  let injected = null;
+  try {
+    await locations.bringAlbumHome(failLib, failConfig, 'Trip');
+  } catch (err) {
+    injected = err;
+  } finally {
+    fs.rmdirSync = realRmdir;
+    fs.unlinkSync = realUnlink;
+  }
+
+  check('a failed bring-home reports the failure', injected !== null);
+  check('and leaves no hidden staging copy behind',
+    !readdirSync(failLib).some((n) => n.startsWith('.incoming-')), readdirSync(failLib).join(','));
+  check('the album is still reachable on its old path',
+    readFileSync(path.join(failLib, 'Trip', firstFile), 'utf8') === firstContent);
+  check('and its real contents are still on the drive',
+    existsSync(path.join(failDrive, 'Trip', firstFile)));
+
+  // It must still be possible to finish the job once the fault clears.
+  await locations.bringAlbumHome(failLib, failConfig, 'Trip');
+  check('and it comes home once the fault clears',
+    !locations.isLink(path.join(failLib, 'Trip'))
+    && readFileSync(path.join(failLib, 'Trip', firstFile), 'utf8') === firstContent);
 } finally {
   for (const dir of roots) rmSync(dir, { recursive: true, force: true });
 }

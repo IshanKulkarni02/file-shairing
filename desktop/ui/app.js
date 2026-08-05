@@ -512,7 +512,181 @@ $('vaultCopyRecoveryBtn').addEventListener('click', () => {
 // Library
 // ---------------------------------------------------------------------------
 
+async function loadLocations() {
+  const list = await window.lanshare.locations.list();
+  const container = $('locationsList');
+  container.textContent = '';
+
+  if (!list.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">No other drives added yet.</p>';
+  } else {
+    for (const loc of list) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `
+        <div class="row__main">
+          <div class="row__title"></div>
+          <div class="row__sub"></div>
+        </div>
+        <span class="badge"></span>
+        <div class="row__actions">
+          <button class="btn btn--sm btn--danger" data-action="remove">Remove</button>
+        </div>`;
+      row.querySelector('.row__title').textContent = loc.label;
+      row.querySelector('.row__sub').textContent = loc.attached
+        ? `${loc.path}${loc.albums.length ? ` · ${loc.albums.length} album${loc.albums.length === 1 ? '' : 's'}` : ''}`
+        : `not connected · last seen at ${loc.recordedPath}`;
+
+      const badge = row.querySelector('.badge');
+      badge.textContent = loc.attached ? 'connected' : 'offline';
+      badge.classList.add(loc.attached ? 'badge--unlocked' : 'badge--locked');
+
+      row.querySelector('[data-action="remove"]').addEventListener('click', async () => {
+        const result = await window.lanshare.locations.remove(loc.id);
+        if (!result.ok) { alert(result.error); return; }
+        loadLocations();
+        loadRelocatable();
+      });
+      container.append(row);
+    }
+  }
+
+  // Moving an album anywhere requires somewhere connected to move it to.
+  const connected = list.filter((l) => l.attached);
+  $('relocateBox').hidden = connected.length === 0;
+  if (connected.length) loadRelocatable(connected);
+}
+
+async function loadRelocatable(connected) {
+  const drives = connected || (await window.lanshare.locations.list()).filter((l) => l.attached);
+  const albums = await window.lanshare.locations.albums();
+  const container = $('albumsList');
+  container.textContent = '';
+
+  if (!albums.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">No albums yet.</p>';
+    return;
+  }
+
+  for (const album of albums) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions"></div>`;
+    row.querySelector('.row__title').textContent = album.name;
+
+    const actions = row.querySelector('.row__actions');
+
+    if (album.linked) {
+      row.querySelector('.row__sub').textContent = album.reachable
+        ? `on ${album.location?.label || 'another drive'}`
+        : `on ${album.location?.label || 'another drive'} — not connected`;
+
+      const back = document.createElement('button');
+      back.className = 'btn btn--sm';
+      back.textContent = 'Bring back';
+      // Copying from a drive that is not attached is not possible; saying so
+      // beats letting someone click and wait for a failure.
+      back.disabled = !album.reachable;
+      back.addEventListener('click', () => runRelocation(
+        `Bring "${album.name}" back into the library?\n\nIts files will be copied back, which can take a while.`,
+        () => window.lanshare.locations.bringHome(album.name),
+      ));
+      actions.append(back);
+    } else {
+      row.querySelector('.row__sub').textContent = 'in the library';
+
+      const select = document.createElement('select');
+      select.className = 'field__input';
+      select.style.cssText = 'width:auto;padding:4px 8px;font-size:.6875rem';
+      select.innerHTML = '<option value="">Move to…</option>'
+        + drives.map((d) => `<option value="${d.id}"></option>`).join('');
+      // Set label text separately rather than interpolating it into markup.
+      drives.forEach((d, i) => { select.options[i + 1].textContent = d.label; });
+
+      select.addEventListener('change', () => {
+        if (!select.value) return;
+        const drive = drives.find((d) => d.id === select.value);
+        const chosen = select.value;
+        select.value = '';
+        runRelocation(
+          `Move "${album.name}" to ${drive.label}?\n\nIts files are copied there and verified before anything is removed. `
+          + 'The album keeps working exactly as it does now on every device.',
+          () => window.lanshare.locations.relocate(album.name, chosen),
+        );
+      });
+      actions.append(select);
+    }
+    container.append(row);
+  }
+}
+
+/** Both directions copy an entire album, so both need the same guard rails. */
+async function runRelocation(confirmText, action) {
+  if (!confirm(confirmText)) return;
+
+  const note = $('relocateNote');
+  note.textContent = 'Copying — this can take a while for a large album. Do not close LANShare.';
+  // Disabling the whole list is blunt, but a second relocation started while
+  // the first is mid-copy would be operating on files that are moving.
+  $('albumsList').style.pointerEvents = 'none';
+  $('albumsList').style.opacity = '0.5';
+
+  try {
+    const result = await action();
+    note.textContent = result.ok ? 'Done.' : '';
+    if (!result.ok) alert(result.error);
+  } catch (err) {
+    // An unexpected failure in the main process rejects the invoke rather than
+    // returning { ok: false }. Without this the note sits on "Copying…" for
+    // the rest of the session and nothing ever says why.
+    note.textContent = '';
+    alert(`The move did not finish: ${err.message}`);
+  } finally {
+    $('albumsList').style.pointerEvents = '';
+    $('albumsList').style.opacity = '';
+    await loadLocations();
+    await loadLibrary();
+  }
+}
+
+$('browseLocationBtn').addEventListener('click', async () => {
+  const picked = await window.lanshare.pickFolder();
+  if (!picked) return;
+  $('newLocationPath').value = picked;
+  // Suggest the folder's own name, since that is usually what someone would
+  // have typed anyway.
+  if (!$('newLocationLabel').value) {
+    $('newLocationLabel').value = picked.split(/[\\/]/).filter(Boolean).pop() || '';
+  }
+  $('addLocationBtn').disabled = false;
+});
+
+$('addLocationBtn').addEventListener('click', async () => {
+  const errorEl = $('locationError');
+  errorEl.classList.remove('is-shown');
+
+  const result = await window.lanshare.locations.add(
+    $('newLocationLabel').value.trim(),
+    $('newLocationPath').value,
+  );
+  if (!result.ok) {
+    errorEl.textContent = result.error;
+    errorEl.classList.add('is-shown');
+    return;
+  }
+  $('newLocationPath').value = '';
+  $('newLocationLabel').value = '';
+  $('addLocationBtn').disabled = true;
+  await loadLocations();
+});
+
 async function loadLibrary() {
+  await loadLocations();
   const stats = await window.lanshare.library.stats();
   $('libStatsPath').textContent = stats.path;
 
