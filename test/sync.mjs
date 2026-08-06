@@ -76,6 +76,55 @@ try {
     check('and it copied some bytes', report.bytesCopied > 0, String(report.bytesCopied));
   }
 
+  // --- a first sync to a folder that does not exist yet -------------------
+  // The liveness check watches the drive, not this sync's own folder within
+  // it. Watching the folder made the very first action abort the whole run,
+  // blaming a disconnection that had not happened.
+
+  {
+    const s = scratch();
+    put(s.source, 'a.jpg', 'photo a');
+    // Exactly what a fresh drive looks like: present, but with nothing of
+    // ours on it yet.
+    rmSync(s.target, { recursive: true, force: true });
+
+    const report = await sync.run({
+      library: s.library,
+      sourceDir: s.source,
+      targetDir: s.target,
+      driveRoot: path.dirname(s.target),
+      targetId: 'fresh-drive',
+    });
+
+    check('a first sync to a folder that does not exist yet works',
+      report.failed.length === 0, JSON.stringify(report.failed));
+    check('and does not claim the drive was disconnected', report.stoppedEarly === false);
+    check('the file really arrives', read(s.target, 'a.jpg') === 'photo a');
+  }
+
+  // --- an encrypted album keeps its key material with it ------------------
+
+  {
+    const s = scratch();
+    // What a vault album looks like on disk: the metadata beside ciphertext.
+    put(s.source, '.lanshare-vault.json', '{"id":"abc","type":"server","keys":[]}');
+    const secret = Buffer.from('MY-PRIVATE-PHOTO-DATA');
+    const key = crypto.randomBytes(32);
+    await vaultfile.encryptBufferToFile(secret, path.join(s.source, 'photo.enc'), {
+      fileKey: key, wrappedKey: crypto.randomBytes(60),
+    });
+
+    await sync.run(runOpts(s));
+
+    check('a vault album carries its metadata to the drive',
+      has(s.target, '.lanshare-vault.json'),
+      'without it the copy on the drive could never be opened');
+    check('and its files arrive as ciphertext',
+      vaultfile.isVaultFile(path.join(s.target, 'photo.enc')));
+    check('with the plaintext nowhere on the drive',
+      !readFileSync(path.join(s.target, 'photo.enc')).includes(secret));
+  }
+
   // --- timestamps survive, or every later run sees the world as changed ---
 
   {
