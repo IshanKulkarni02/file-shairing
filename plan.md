@@ -332,6 +332,14 @@ drive is genuinely replugged.
   shown cannot drift from what happens. Deletions are listed first — burying
   them under a hundred copies is how someone approves one blind.
 
+**Deleting a relocated album** trashes its contents into a `.lanshare-trash`
+folder on the drive that holds them, and only then removes the link. The
+ordinary path would trash the link alone, leaving gigabytes on that drive with
+nothing pointing at them — not deleted, just invisible and permanent. It
+refuses outright when the drive is not connected, because there is no honest
+way to delete something you cannot reach. Same principle as trashing a vault
+file inside its own vault: a deletion stays with the data it belongs to.
+
 **A bug found by driving the real UI, not by the tests:** a *preview* created
 a folder on the drive, because target resolution mkdir'd unconditionally and
 the engine's own dry-run test never went through that layer. **Third time an
