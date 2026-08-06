@@ -85,6 +85,13 @@ contextBridge.exposeInMainWorld('lanshare', {
     },
   },
 
+  tunnel: {
+    status: () => invoke('tunnel:status'),
+    enable: (relayHost, relayPort) => invoke('tunnel:enable', { relayHost, relayPort }),
+    disable: () => invoke('tunnel:disable'),
+    code: () => invoke('tunnel:code'),
+  },
+
   vaults: {
     list: () => invoke('vaults:list'),
     unlock: (path, secret) => invoke('vaults:unlock', { path, ...secret }),

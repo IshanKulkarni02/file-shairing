@@ -352,11 +352,61 @@
     </div>
 
     <div class="card">
+      <h3 style="font-size:.9rem;margin-bottom:.2rem">Reach this machine over the internet</h3>
+      <p class="panel__sub" style="margin:0 0 .6rem">
+        Both machines connect out to a relay you run, so neither needs anything
+        opened on its router. The relay carries the traffic but cannot read it.
+      </p>
+
+      <div class="field-row">
+        <input class="field__input" id="relayHost" placeholder="relay.example.com" style="flex:1">
+        <input class="field__input" id="relayPort" value="8460" style="width:90px">
+      </div>
+      <p class="field__error" id="relayError"></p>
+      <div class="field-row" style="margin-top:.6rem">
+        <button class="btn btn--primary" id="enableTunnelBtn">Turn on</button>
+        <button class="btn btn--ghost" id="showCodeBtn" hidden>Show pairing code</button>
+        <button class="btn btn--danger" id="disableTunnelBtn" hidden>Turn off</button>
+      </div>
+
+      <div id="pairingCodeBox" hidden style="margin-top:.75rem">
+        <p class="panel__sub" style="margin:0 0 .35rem">
+          Enter this on the other machine. <strong>Anyone who has it can reach this
+          library</strong>, so share it the way you would a password — and never
+          in the same message as one.
+        </p>
+        <div class="addr">
+          <span class="addr__value" id="pairingCode" style="font-size:1rem;letter-spacing:.06em"></span>
+          <button class="btn btn--sm" id="copyCodeBtn">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <h3 style="font-size:.9rem;margin-bottom:.6rem">Add a machine</h3>
 
       <div class="field">
+        <label class="field__label" for="connMethod">How to reach it</label>
+        <select class="field__input" id="connMethod">
+          <option value="lan">On this network, by address</option>
+          <option value="relay">Over the internet, with a pairing code</option>
+        </select>
+      </div>
+
+      <div class="field" id="connAddressField">
         <label class="field__label" for="connAddress">Its address</label>
         <input class="field__input" id="connAddress" placeholder="192.168.1.20 or mac.local">
+      </div>
+
+      <div id="connCodeFields" hidden>
+        <div class="field">
+          <label class="field__label" for="connCode">Its pairing code</label>
+          <input class="field__input" id="connCode" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX">
+        </div>
+        <div class="field-row">
+          <input class="field__input" id="connRelayHost" placeholder="relay.example.com" style="flex:1">
+          <input class="field__input" id="connRelayPort" value="8460" style="width:90px">
+        </div>
       </div>
       <div class="field">
         <label class="field__label" for="connUsername">Username on that machine</label>

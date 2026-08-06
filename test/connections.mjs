@@ -243,6 +243,81 @@ try {
       failed?.status === 401, failed?.message);
   }
 
+  // --- the same connection, but over the internet --------------------------
+  // A relayed host has to behave identically to a direct one, or the Machines
+  // screen would need a second code path for "the same thing, further away".
+
+  {
+    const tunnel = require(path.join(here, '..', 'lib', 'tunnel.js'));
+    const { createRelay } = require(path.join(here, '..', 'relay', 'server.js'));
+
+    const relay = createRelay({ log: () => {} });
+    await relay.listen(8544, '127.0.0.1');
+
+    const pairing = tunnel.createPairing();
+    const tunnelHost = new tunnel.TunnelHost({
+      relayHost: '127.0.0.1',
+      relayPort: 8544,
+      pairing,
+      localPort: 8541,
+      log: () => {},
+    });
+    tunnelHost.start();
+
+    const relayConfig = {};
+    const record = await connections.addByCode(relayConfig, {
+      code: pairing.code,
+      relayHost: '127.0.0.1',
+      relayPort: 8544,
+      username: 'admin',
+      password: PASSWORD,
+      label: 'Home machine',
+    }, { secrets });
+
+    check('a machine can be paired with over the internet', Boolean(record.id));
+    check('and is marked as reached through a relay', record.via === 'relay');
+    check('the pairing code is not left in the config either',
+      !JSON.stringify(relayConfig).includes(pairing.code.replace(/-/g, '')),
+      'the code was stored in the clear');
+
+    const wrongCode = await connections.addByCode(relayConfig, {
+      code: tunnel.createPairing().code,
+      relayHost: '127.0.0.1',
+      relayPort: 8544,
+      username: 'admin',
+      password: PASSWORD,
+    }, { secrets }).then(() => null, (err) => err);
+    check('a code nobody is listening for fails rather than hanging', wrongCode !== null,
+      'it connected to nothing');
+
+    const relayed = await connections.connect(relayConfig, record.id, { secrets });
+    check('a relayed connection signs in', Boolean(relayed.cookie));
+
+    const remoteListing = await relayed.list('/Trip');
+    check('and browses the other library exactly like a direct one',
+      remoteListing.files?.some((f) => f.name === 'beach.txt'),
+      JSON.stringify(remoteListing.files?.map((f) => f.name)));
+
+    // The real proof that it is the same interface: the copy helper is used
+    // unchanged, with no idea which kind of connection it holds.
+    const copied = await connections.copyFiles(relayed, {
+      direction: 'download',
+      remoteDir: '/Trip',
+      localDir: path.join(localLibrary, 'ViaRelay'),
+      files: ['beach.txt'],
+      fsp,
+      path,
+    });
+    check('files copy over the internet through the same code path',
+      copied.copied.length === 1, JSON.stringify(copied));
+    check('with contents intact',
+      readFileSync(path.join(localLibrary, 'ViaRelay', 'beach.txt'), 'utf8') === 'a photo of a beach');
+
+    relayed.close?.();
+    tunnelHost.stop();
+    await relay.close();
+  }
+
   // --- removing --------------------------------------------------------------
 
   {
