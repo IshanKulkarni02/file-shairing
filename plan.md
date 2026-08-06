@@ -22,7 +22,7 @@ the internet without port forwarding.
 | C | Storage across drives | **Done** |
 | D | Sync | **Done** |
 | E | macOS and Linux | **Code done**, unverified on real hardware |
-| F | Client mode — connect to other hosts | Not started |
+| F | Client mode — connect to other hosts | **Done** |
 | G | P2P over the internet | Not started |
 
 ---
@@ -123,7 +123,13 @@ prove them. Current suites, all run against a live server:
 | `test/sync-routes.mjs` | syncs over HTTP: setting one up, the guards on where it can point, a preview that writes nothing at all, a real run, a change made on the drive coming back, a deletion propagating and staying gone, and a viewer being refused |
 | `test/sync-watcher.mjs` | running on connect: an already-connected drive is not an arrival, a replug runs again, an unrelated drive does not, a failure is not retried every tick, and overlapping ticks start one run |
 
-All 19 suites, 594 checks, pass together as of the Phase D merge.
+| `test/remote.mjs` | being a client of another host: address forms, certificate pinning, and that a wrong fingerprint stops the password ever being sent |
+| `test/discovery.mjs` | finding hosts on the LAN: announce, query-on-start, self-exclusion, expiry, and ignoring junk on the group |
+| `test/connections.mjs` | pairing and copying between two libraries, with the password never reaching config.json |
+| `test/volume-parsers.mjs` | reading real recorded diskutil and lsblk output, so the macOS and Linux paths are covered from any machine |
+| `test/autostart.mjs` | start-on-login per platform, especially the Linux XDG entry Electron does not write |
+
+All 24 suites, 891 checks, pass together as of the Phase F merge.
 (`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
 the standard sweep — one needs the HTTPS listener, the other moves a
 gigabyte. `test/electron-links.js` needs an Electron runtime, for the reason
@@ -397,6 +403,63 @@ says so while building rather than leaving it to be discovered.
 these flags; that the XDG entry actually launches in a real desktop session;
 that the tray works under GNOME and KDE; that sharp and ffmpeg resolve inside
 an AppImage's mount; and that the DMG opens at all.
+
+---
+
+## Phase F — client mode (done)
+
+Every machine can now be a client of every other. A Mac browses the Windows
+box's library and copies either way, with neither one special.
+
+**Certificate pinning, not `rejectUnauthorized: false`.** Every LANShare host
+serves HTTPS with a self-signed certificate; there is no certificate authority
+on a home network and never will be. Disabling verification would accept any
+certificate from anyone, which is plain HTTP with extra steps — anything on
+the network could impersonate the host and collect the password sent to it.
+So the certificate is pinned the way SSH pins host keys: the first connection
+records its SHA-256 fingerprint, every later one requires exactly that, and a
+change fails loudly rather than being waved through. The first connection is
+trusted blindly, the same trade-off SSH makes.
+
+**The test for that found a real hole.** Node's global agent pools TLS
+sockets, so a socket opened for one host — or for an unpinned probe — was
+handed to a request with a different expectation, whose handshake never ran
+and whose fingerprint was therefore never checked. A pooled socket skipping
+the check is exactly the hole pinning exists to close. Fixed by never using
+the global agent, verifying during the handshake so the request is never
+written, and re-checking in the response callback as a backstop. The strongest
+test asserts the property that matters: signing in to a wrong-fingerprint host
+with the *correct* password leaves no session there, proving the password was
+never sent rather than merely rejected afterwards.
+
+**Passwords go to the OS keychain**, via Electron `safeStorage`, never to
+config.json — which gets copied around with the library, synced to backup
+drives, and read by anything running as the user. Where no keychain exists
+(headless, or Linux without a keyring) nothing is saved and the password is
+asked for each time: worse to use, much better than a plain-text file that
+looks harmless. A blob that cannot be decrypted — restored backup, different
+user — reads as "not saved" and asks, rather than throwing a keychain error.
+
+**Discovery is UDP multicast, not mDNS.** The plan said mDNS, which is right
+if you want to be found by *other* software; nothing here needs that, since
+only LANShare looks for LANShare. mDNS means either a dependency carrying a
+full DNS-SD stack or several hundred lines of packet construction with
+conflict resolution to get subtly wrong. One multicast group does the same job
+in a fraction of the code with no dependency. Announcements carry only what a
+port scan would reveal anyway — never library contents, account names or keys.
+
+**Two bugs found by running it for real rather than by the tests:**
+
+- `addMembership(group)` with no interface lets the OS choose, and on a
+  machine with virtual adapters (Hyper-V, WSL, a VPN) it routinely chooses one
+  of those. Nothing errors; discovery just silently never finds anything,
+  which is a miserable thing to debug. Now joins every interface explicitly.
+- `start()` destructured only three fields out of `createApp()`, so the sync
+  watcher and the discovery service never reached the handle the desktop app
+  holds. Every caller checks for them before use, so this cost nothing
+  visible — the features simply did nothing, silently. **A third pattern to
+  watch alongside the seam rule: an optional-chained property that is always
+  absent looks exactly like a feature that is off.**
 
 ---
 

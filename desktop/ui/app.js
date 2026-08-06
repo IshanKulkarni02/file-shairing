@@ -42,6 +42,7 @@ const panelLoaders = {
   vaults: () => loadVaults(),
   library: () => loadLibrary(),
   sync: () => loadSync(),
+  connections: () => loadConnections(),
   settings: () => loadSettings(),
 };
 
@@ -1152,6 +1153,291 @@ window.lanshare.sync.onProgress(({ id, done, total }) => {
 
 // A sync that starts on its own, because its drive was plugged in, has to
 // show up here too — otherwise the app looks idle while it copies gigabytes.
+// ---------------------------------------------------------------------------
+// Machines — other LANShare hosts
+// ---------------------------------------------------------------------------
+
+/** The connection whose library is open in the browse card, if any. */
+let browsingConnection = null;
+let browsingPath = '/';
+
+async function loadConnections() {
+  const { connections, discovered, keychain } = await window.lanshare.connections.list();
+
+  renderConnections(connections);
+  renderDiscovered(discovered);
+
+  $('connRemember').disabled = !keychain;
+  $('connAddNote').textContent = keychain
+    ? ''
+    : 'This computer has no keychain available, so the password cannot be saved — '
+      + 'you will be asked for it each time you connect.';
+}
+
+function renderConnections(list) {
+  const container = $('connectionsList');
+  container.textContent = '';
+
+  if (!list.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">'
+      + 'No other machines connected yet.</p>';
+    return;
+  }
+
+  for (const connection of list) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions">
+        <button class="btn btn--sm" data-action="browse">Browse</button>
+        <button class="btn btn--sm btn--danger" data-action="remove">Remove</button>
+      </div>`;
+
+    row.querySelector('.row__title').textContent = connection.label;
+    row.querySelector('.row__sub').textContent =
+      `${connection.base} as ${connection.username}`
+      + (connection.hasSavedPassword ? '' : ' · password not saved');
+
+    row.querySelector('[data-action="browse"]')
+      .addEventListener('click', () => browseConnection(connection));
+
+    row.querySelector('[data-action="remove"]').addEventListener('click', async () => {
+      const ok = confirm(`Disconnect from "${connection.label}"?\n\n`
+        + 'Nothing already copied is removed — this only forgets the connection '
+        + 'and its saved password.');
+      if (!ok) return;
+      const result = await window.lanshare.connections.remove(connection.id);
+      if (!result.ok) { alert(result.error); return; }
+      if (browsingConnection?.id === connection.id) closeBrowse();
+      loadConnections();
+    });
+
+    container.append(row);
+  }
+}
+
+function renderDiscovered(hosts) {
+  const card = $('discoveredCard');
+  const container = $('discoveredList');
+  container.textContent = '';
+
+  card.hidden = !hosts?.length;
+  if (!hosts?.length) return;
+
+  for (const host of hosts) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions">
+        <button class="btn btn--sm" data-action="use">Use this</button>
+      </div>`;
+    row.querySelector('.row__title').textContent = host.name;
+    row.querySelector('.row__sub').textContent = `${host.address}:${host.httpsPort}`;
+
+    row.querySelector('[data-action="use"]').addEventListener('click', () => {
+      $('connAddress').value = `${host.address}:${host.httpsPort}`;
+      $('connUsername').focus();
+    });
+    container.append(row);
+  }
+}
+
+$('addConnBtn').addEventListener('click', async () => {
+  const errorEl = $('connError');
+  errorEl.classList.remove('is-shown');
+
+  const button = $('addConnBtn');
+  button.disabled = true;
+  button.textContent = 'Connecting…';
+
+  try {
+    const result = await window.lanshare.connections.add({
+      address: $('connAddress').value,
+      username: $('connUsername').value,
+      password: $('connPassword').value,
+      remember: $('connRemember').checked,
+    });
+
+    if (!result.ok) {
+      errorEl.textContent = result.error;
+      errorEl.classList.add('is-shown');
+      return;
+    }
+
+    // Never leave a password sitting in a field once it has been used.
+    $('connPassword').value = '';
+    $('connAddress').value = '';
+    $('connUsername').value = '';
+    await loadConnections();
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Connect';
+  }
+});
+
+async function browseConnection(connection, remotePath = '/') {
+  browsingConnection = connection;
+  browsingPath = remotePath;
+
+  $('browseCard').hidden = false;
+  $('browseTitle').textContent = `Browsing ${connection.label}`;
+  $('browsePath').textContent = remotePath;
+  $('browseList').textContent = '';
+  $('browseList').append(noteEl('Loading…'));
+  $('transferNote').textContent = '';
+
+  let password = null;
+  const result = await window.lanshare.connections.browse(connection.id, remotePath);
+
+  if (!result.ok && /password/i.test(result.error || '')) {
+    // No saved password on this machine — ask, and keep it only for this call.
+    password = prompt(`Password for ${connection.username} on ${connection.label}:`);
+    if (!password) { closeBrowse(); return; }
+    const retry = await window.lanshare.connections.browse(connection.id, remotePath, password);
+    if (!retry.ok) { showBrowseError(retry.error); return; }
+    renderBrowse(retry.listing);
+    return;
+  }
+
+  if (!result.ok) { showBrowseError(result.error); return; }
+  renderBrowse(result.listing);
+}
+
+function showBrowseError(message) {
+  $('browseList').textContent = '';
+  $('browseList').append(noteEl(message));
+  $('downloadSelectedBtn').disabled = true;
+}
+
+function renderBrowse(listing) {
+  const container = $('browseList');
+  container.textContent = '';
+  $('browsePath').textContent = listing.path || '/';
+  browsingPath = listing.path || '/';
+
+  if (browsingPath !== '/') {
+    const up = document.createElement('div');
+    up.className = 'row';
+    up.innerHTML = '<div class="row__main"><div class="row__title">← Back</div></div>';
+    up.style.cursor = 'pointer';
+    up.addEventListener('click', () => {
+      const parent = browsingPath.replace(/\/[^/]+$/, '') || '/';
+      browseConnection(browsingConnection, parent);
+    });
+    container.append(up);
+  }
+
+  for (const folder of listing.folders || []) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.cursor = 'pointer';
+    row.innerHTML = '<div class="row__main"><div class="row__title"></div>'
+      + '<div class="row__sub">Album</div></div>';
+    row.querySelector('.row__title').textContent = folder.name;
+    row.addEventListener('click', () => browseConnection(browsingConnection, folder.path));
+    container.append(row);
+  }
+
+  for (const file of listing.files || []) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <label class="check-row" style="margin:0;flex:1">
+        <input type="checkbox" data-name="">
+        <span class="row__title"></span>
+      </label>
+      <div class="row__sub"></div>`;
+    row.querySelector('input').dataset.name = file.name;
+    row.querySelector('.row__title').textContent = file.name;
+    row.querySelector('.row__sub').textContent = formatBytes(file.size || 0);
+    row.querySelector('input').addEventListener('change', updateDownloadButton);
+    container.append(row);
+  }
+
+  if (!(listing.folders || []).length && !(listing.files || []).length) {
+    container.append(noteEl('This album is empty.'));
+  }
+  updateDownloadButton();
+}
+
+function selectedRemoteFiles() {
+  return [...$('browseList').querySelectorAll('input[type="checkbox"]:checked')]
+    .map((input) => input.dataset.name);
+}
+
+function updateDownloadButton() {
+  $('downloadSelectedBtn').disabled = selectedRemoteFiles().length === 0;
+}
+
+$('downloadSelectedBtn').addEventListener('click', async () => {
+  const files = selectedRemoteFiles();
+  if (!files.length || !browsingConnection) return;
+
+  await runTransfer('download', {
+    id: browsingConnection.id,
+    direction: 'download',
+    remoteDir: browsingPath,
+    localPath: $('browseLocalDir').value || '/',
+    files,
+  });
+});
+
+$('uploadHereBtn').addEventListener('click', async () => {
+  if (!browsingConnection) return;
+  const picked = await window.lanshare.pickLibraryFiles();
+  if (!picked) return;
+  if (picked.error) { alert(picked.error); return; }
+
+  await runTransfer('upload', {
+    id: browsingConnection.id,
+    direction: 'upload',
+    remoteDir: browsingPath,
+    localPath: picked.dir,
+    files: picked.names,
+  });
+});
+
+async function runTransfer(kind, input) {
+  const note = $('transferNote');
+  note.textContent = kind === 'download' ? 'Copying here…' : 'Sending…';
+  $('downloadSelectedBtn').disabled = true;
+
+  try {
+    const result = await window.lanshare.connections.copy(input);
+    if (!result.ok) { note.textContent = ''; alert(result.error); return; }
+
+    const { copied, failed, bytes } = result.result;
+    note.textContent = failed.length
+      ? `${copied.length} copied, ${failed.length} failed — ${failed[0].error}`
+      : `${copied.length} file${copied.length === 1 ? '' : 's'} copied (${formatBytes(bytes)}).`;
+  } catch (err) {
+    note.textContent = '';
+    alert(`The transfer did not finish: ${err.message}`);
+  } finally {
+    updateDownloadButton();
+  }
+}
+
+$('browseCloseBtn').addEventListener('click', closeBrowse);
+
+function closeBrowse() {
+  browsingConnection = null;
+  $('browseCard').hidden = true;
+}
+
+window.lanshare.connections.onProgress(({ done, total, name }) => {
+  if (!browsingConnection) return;
+  $('transferNote').textContent = `${done} of ${total} — ${name}`;
+});
+
 window.lanshare.sync.onChanged(({ running }) => {
   runningSyncIds.clear();
   for (const id of running || []) runningSyncIds.add(id);

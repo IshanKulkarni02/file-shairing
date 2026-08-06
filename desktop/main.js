@@ -8,7 +8,9 @@
  * other device on the network.
  */
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, clipboard } = require('electron');
+const {
+  app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, clipboard, safeStorage,
+} = require('electron');
 const path = require('path');
 const fs = require('fs');
 const QRCode = require('qrcode');
@@ -42,6 +44,8 @@ const locations = require('../lib/locations');
 const syncTargets = require('../lib/sync-targets');
 const syncEngine = require('../lib/sync');
 const autostart = require('../lib/autostart');
+const connections = require('../lib/connections');
+const paths = require('../lib/paths');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -553,6 +557,128 @@ function throttledProgress(id) {
     }
   };
 }
+
+// --- other machines --------------------------------------------------------
+
+/** Signed-in remote hosts, by connection id. Sessions live in memory only. */
+const openConnections = new Map();
+
+ipcMain.handle('connections:list', () => ({
+  connections: connections.list(config),
+  // Discovered hosts that are not already paired — the useful half of the
+  // discovery list, since re-adding a machine you have is not a thing anyone
+  // wants offered.
+  discovered: (serverHandle?.discovery?.list() || []).filter((host) => {
+    const bases = [`https://${host.address}:${host.httpsPort}`, `http://${host.address}:${host.httpPort}`];
+    return !connections.list(config).some((c) => bases.includes(c.base));
+  }),
+  keychain: secretStore().available,
+}));
+
+ipcMain.handle('connections:add', guarded(async (event, input) => {
+  const record = await connections.add(config, input || {}, { secrets: secretStore() });
+  configLib.save(config);
+  return { connection: { id: record.id, label: record.label, base: record.base } };
+}));
+
+ipcMain.handle('connections:remove', guarded((event, id) => {
+  openConnections.delete(id);
+  connections.remove(config, id);
+  configLib.save(config);
+  return {};
+}));
+
+ipcMain.handle('connections:browse', guarded(async (event, { id, path: remotePath, password }) => {
+  const host = await openConnection(id, password);
+  return { listing: await host.list(remotePath || '/') };
+}));
+
+ipcMain.handle('connections:copy', guarded(async (event, {
+  id, direction, remoteDir, localPath, files, password,
+}) => {
+  const host = await openConnection(id, password);
+  const target = permissionlessLocalPath(localPath);
+
+  const result = await connections.copyFiles(host, {
+    direction,
+    remoteDir: remoteDir || '/',
+    localDir: target,
+    files: Array.isArray(files) ? files : [],
+    fsp: require('fs/promises'),
+    path,
+    onProgress: (progress) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('transfer-progress', { id, ...progress });
+      }
+    },
+  });
+  return { result };
+}));
+
+/**
+ * A local folder inside this library, and nowhere else.
+ *
+ * The renderer supplies this, so it is checked here rather than trusted —
+ * the same rule every server route follows.
+ */
+function permissionlessLocalPath(input) {
+  const resolved = paths.resolveSafe(libraryPath(), input || '/');
+  if (!resolved) throw new connections.ConnectionError('That folder is not inside your library');
+  fs.mkdirSync(resolved.abs, { recursive: true });
+  return resolved.abs;
+}
+
+/** Reuse a signed-in session where there is one; sign in when there is not. */
+async function openConnection(id, password) {
+  const existing = openConnections.get(id);
+  if (existing?.cookie) return existing;
+
+  const host = await connections.connect(config, id, { password, secrets: secretStore() });
+  openConnections.set(id, host);
+  configLib.save(config);
+  return host;
+}
+
+let cachedSecretStore = null;
+function secretStore() {
+  if (!cachedSecretStore) cachedSecretStore = connections.makeSecretStore(safeStorage);
+  return cachedSecretStore;
+}
+
+/**
+ * Pick files to send to another machine, from inside the library.
+ *
+ * The dialog opens at the library and anything chosen outside it is rejected
+ * rather than silently dropped, so "send these" cannot be turned into "read
+ * any file on this computer" by navigating up out of the folder.
+ */
+ipcMain.handle('dialog:pickLibraryFiles', async () => {
+  const library = libraryPath();
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose files to send',
+    defaultPath: library,
+    properties: ['openFile', 'multiSelections'],
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+
+  const outside = result.filePaths.filter((file) => !paths.isInside(library, file));
+  if (outside.length) {
+    return { error: 'Those files are outside your library. Copy them into it first.' };
+  }
+
+  // All from one folder keeps the transfer a single remote directory, which
+  // is what the receiving side expects.
+  const dirs = new Set(result.filePaths.map((file) => path.dirname(file)));
+  if (dirs.size > 1) {
+    return { error: 'Choose files from one album at a time.' };
+  }
+
+  const dir = [...dirs][0];
+  return {
+    dir: `/${path.relative(library, dir).split(path.sep).join('/')}`.replace(/\/+$/, '') || '/',
+    names: result.filePaths.map((file) => path.basename(file)),
+  };
+});
 
 // --- settings --------------------------------------------------------------
 
