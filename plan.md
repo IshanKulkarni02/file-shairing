@@ -21,7 +21,7 @@ the internet without port forwarding.
 | B | Encrypted vaults | **Done** |
 | C | Storage across drives | **Done** |
 | D | Sync | **Done** |
-| E | macOS and Linux | Not started |
+| E | macOS and Linux | **Code done**, unverified on real hardware |
 | F | Client mode — connect to other hosts | Not started |
 | G | P2P over the internet | Not started |
 
@@ -333,6 +333,70 @@ audit has found a bug in the seam between two well-tested modules** (after
 the vault-blind routes in Phase B and the junction listing in Phase C). The
 pattern is now reliable enough to plan around: when two modules are each
 tested and then joined, test the join specifically.
+
+---
+
+## Phase E — macOS and Linux (code done, unverified on hardware)
+
+**What is honestly true:** the code is written, and the parts testable from a
+Windows machine are tested. Nothing here has run on a Mac or a Linux box.
+Read the status as "ready to try", not "known working".
+
+**Volume detection was made testable rather than left hopeful.** Command
+execution is now separate from parsing, so `parseDarwinInfo`,
+`parseDarwinVolumeNames` and `parseLinux` are unit-tested against real
+recorded `diskutil` and `lsblk` output. That does not prove those commands
+exist or accept these flags — only hardware proves that — but it covers the
+part most likely to be wrong, and it immediately earned its keep: the macOS
+size regex was written backwards (`diskutil` prints the exact byte count
+first and the rounded figure in parentheses) and reported every Mac volume as
+0 bytes.
+
+Cases now handled that naive parsing gets wrong: volume names with spaces;
+volumes with no UUID (network shares — degrade to the path fallback rather
+than crash); disk images reporting only a partition UUID; Thunderbolt disks
+that claim to be "Fixed" media; snap's dozens of loop-mounted squashfs
+pseudo-drives on Ubuntu; `rm` reported as the string `"1"` by older lsblk;
+and one filesystem mounted at several points by btrfs.
+
+**Autostart could not use Electron's API alone.** `setLoginItemSettings()`
+covers Windows and macOS and **does nothing at all on Linux** — silently, so
+the checkbox would tick, the setting would save, and nothing would ever
+start. `lib/autostart.js` writes the XDG
+`~/.config/autostart/lanshare.desktop` entry there instead: honours
+`XDG_CONFIG_HOME`, quotes paths with spaces, and passes the app directory as
+well as the executable when running from source, or the entry would launch a
+blank Electron shell. State is read back from the OS rather than from config,
+because the entry can be removed outside the app.
+
+**The Linux tray can be absent entirely** — GNOME without the AppIndicator
+extension, or a minimal window manager — and Electron throws rather than
+degrading. That matters beyond a missing icon: with close-to-tray on, closing
+the window would hide it somewhere unreachable. Tray creation is guarded, and
+close-to-tray is forced off when there is nowhere to hide to.
+
+**Packaging:** DMG (arm64 + x64), AppImage and `.deb` alongside NSIS. ffmpeg
+is bundled only on Windows; macOS and Linux fall back to `PATH` (brew/apt),
+and the `.deb` declares `ffmpeg` as a dependency so apt supplies a build that
+stays patched. `vendor/ffmpeg-mac` and `vendor/ffmpeg-linux` exist for anyone
+wanting a self-contained AppImage. Without ffmpeg the app still runs; what is
+lost is video thumbnails, duration and HEVC conversion.
+
+These **do not cross-compile usefully** — a DMG needs macOS, a `.deb` wants
+Linux or Docker — so `desktop-build.js` defaults to the host platform and
+says so when asked for another. It also calls the local `electron-builder`
+binary directly instead of going through `npx`, which this machine's security
+software intermittently refuses outright.
+
+**macOS ships unsigned** without an Apple Developer account ($99/yr).
+Gatekeeper refuses unsigned apps on first launch; the way in is right-click →
+Open, once. Apple policy, not something code can work around. The build now
+says so while building rather than leaving it to be discovered.
+
+**Still needs real hardware:** that `diskutil`/`lsblk` are present and take
+these flags; that the XDG entry actually launches in a real desktop session;
+that the tray works under GNOME and KDE; that sharp and ffmpeg resolve inside
+an AppImage's mount; and that the DMG opens at all.
 
 ---
 
