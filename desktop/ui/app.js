@@ -41,6 +41,7 @@ const panelLoaders = {
   devices: () => loadDevices(),
   vaults: () => loadVaults(),
   library: () => loadLibrary(),
+  sync: () => loadSync(),
   settings: () => loadSettings(),
 };
 
@@ -817,4 +818,334 @@ $('settingsForm').addEventListener('submit', async (event) => {
   } finally {
     $('settingsSubmitBtn').disabled = false;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
+
+/** Targets currently running, so their rows say so and cannot be started twice. */
+const runningSyncIds = new Set();
+let previewingSyncId = null;
+
+const POLICY_NOTES = {
+  'keep-both': 'Both versions are kept — the one from the drive is saved under a new name '
+    + 'that says where it came from. Nothing is ever overwritten.',
+  'newest-wins': 'The version edited most recently replaces the other. Quieter, but if the '
+    + 'two machines’ clocks disagree it can keep the wrong one.',
+  mirror: 'The drive is made to match the library exactly, including removing anything the '
+    + 'library does not have. Changes made on the drive never come back.',
+};
+
+$('syncPolicy').addEventListener('change', () => {
+  $('syncPolicyNote').textContent = POLICY_NOTES[$('syncPolicy').value] || '';
+});
+
+async function loadSync() {
+  $('syncPolicyNote').textContent = POLICY_NOTES[$('syncPolicy').value] || '';
+
+  const [{ targets }, albums, drives] = await Promise.all([
+    window.lanshare.sync.list(),
+    window.lanshare.sync.albums(),
+    window.lanshare.locations.list(),
+  ]);
+
+  renderSyncTargets(targets);
+  renderSyncSetup(albums, drives);
+}
+
+function renderSyncTargets(targets) {
+  const container = $('syncList');
+  container.textContent = '';
+
+  if (!targets.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">No syncs set up yet.</p>';
+    return;
+  }
+
+  for (const target of targets) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <span class="badge"></span>
+      <div class="row__actions">
+        <button class="btn btn--sm" data-action="preview">Preview</button>
+        <button class="btn btn--sm btn--danger" data-action="remove">Remove</button>
+      </div>`;
+
+    row.querySelector('.row__title').textContent = target.label;
+    row.querySelector('.row__sub').textContent = describeSyncTarget(target);
+
+    const badge = row.querySelector('.badge');
+    if (runningSyncIds.has(target.id)) {
+      badge.textContent = 'running';
+      badge.classList.add('badge--unlocked');
+    } else if (target.orphaned) {
+      badge.textContent = 'drive removed';
+      badge.classList.add('badge--locked');
+    } else {
+      badge.textContent = target.location?.attached ? 'connected' : 'offline';
+      badge.classList.add(target.location?.attached ? 'badge--unlocked' : 'badge--locked');
+    }
+
+    const previewBtn = row.querySelector('[data-action="preview"]');
+    // Comparing needs the drive present. Saying so up front beats a failure
+    // after the click.
+    previewBtn.disabled = !target.location?.attached || runningSyncIds.has(target.id);
+    previewBtn.addEventListener('click', () => showSyncPreview(target));
+
+    row.querySelector('[data-action="remove"]').addEventListener('click', async () => {
+      const ok = confirm(`Stop syncing "${target.label}"?\n\n`
+        + 'Nothing already copied is removed — this only stops future syncs.');
+      if (!ok) return;
+      const result = await window.lanshare.sync.remove(target.id);
+      if (!result.ok) { alert(result.error); return; }
+      if (previewingSyncId === target.id) hideSyncPreview();
+      loadSync();
+    });
+
+    container.append(row);
+  }
+}
+
+function describeSyncTarget(target) {
+  if (target.orphaned) return 'The drive this synced to is no longer set up';
+
+  const where = target.location ? target.location.label : 'a drive';
+  const what = target.album === '/' ? 'Everything' : target.album;
+  const parts = [`${what} → ${where}`];
+
+  if (!target.lastRun) {
+    parts.push('never run');
+  } else {
+    const when = new Date(target.lastRun.at);
+    const bits = [];
+    if (target.lastRun.copied) bits.push(`${target.lastRun.copied} copied`);
+    if (target.lastRun.deleted) bits.push(`${target.lastRun.deleted} removed`);
+    if (target.lastRun.conflicts) bits.push(`${target.lastRun.conflicts} conflicts`);
+    if (target.lastRun.failed) bits.push(`${target.lastRun.failed} failed`);
+    if (target.lastRun.stoppedEarly) bits.push('stopped early');
+    parts.push(`last run ${when.toLocaleDateString()} ${when.toLocaleTimeString()}`
+      + (bits.length ? ` — ${bits.join(', ')}` : ' — nothing to do'));
+  }
+  return parts.join(' · ');
+}
+
+function renderSyncSetup(albums, drives) {
+  const albumSelect = $('syncAlbum');
+  albumSelect.textContent = '';
+  for (const album of albums) {
+    const option = document.createElement('option');
+    option.value = album.path;
+    option.textContent = album.name;
+    albumSelect.append(option);
+  }
+
+  const locationSelect = $('syncLocation');
+  locationSelect.textContent = '';
+  const usable = drives.filter((d) => d.attached);
+
+  if (!usable.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = drives.length
+      ? 'No drives connected right now'
+      : 'Add a drive on the Library screen first';
+    locationSelect.append(option);
+    $('addSyncBtn').disabled = true;
+    $('syncSetupNote').textContent = drives.length
+      ? 'Connect one of your drives to set up a sync to it.'
+      : 'Syncs copy to a drive you have registered. Add one under Library → Other drives.';
+    return;
+  }
+
+  for (const drive of usable) {
+    const option = document.createElement('option');
+    option.value = drive.id;
+    option.textContent = drive.label;
+    locationSelect.append(option);
+  }
+  $('addSyncBtn').disabled = false;
+  $('syncSetupNote').textContent = '';
+}
+
+$('addSyncBtn').addEventListener('click', async () => {
+  const errorEl = $('syncError');
+  errorEl.classList.remove('is-shown');
+
+  const result = await window.lanshare.sync.add({
+    album: $('syncAlbum').value,
+    locationId: $('syncLocation').value,
+    policy: $('syncPolicy').value,
+    runOnConnect: $('syncOnConnect').checked,
+  });
+
+  if (!result.ok) {
+    errorEl.textContent = result.error;
+    errorEl.classList.add('is-shown');
+    return;
+  }
+
+  await loadSync();
+  // Straight into a preview: the first thing worth knowing about a new sync
+  // is what it is about to do, before it does it.
+  const { targets } = await window.lanshare.sync.list();
+  const created = targets.find((t) => t.id === result.target.id);
+  if (created) showSyncPreview(created);
+});
+
+async function showSyncPreview(target) {
+  previewingSyncId = target.id;
+  $('syncPreviewCard').hidden = false;
+  $('syncPreviewTitle').textContent = `What "${target.label}" would do`;
+  $('syncPreviewGrid').textContent = '';
+  $('syncPreviewSkipped').textContent = '';
+  $('syncPreviewList').textContent = '';
+  $('syncPreviewList').append(noteEl('Working it out…'));
+  $('syncConfirmBtn').disabled = true;
+
+  const result = await window.lanshare.sync.preview(target.id);
+  if (!result.ok) {
+    $('syncPreviewList').textContent = '';
+    $('syncPreviewList').append(noteEl(result.error));
+    return;
+  }
+
+  renderSyncReport(result.report, { preview: true });
+  $('syncConfirmBtn').disabled = result.report.planned.total === 0;
+  $('syncConfirmBtn').onclick = () => runSyncNow(target);
+}
+
+function noteEl(text) {
+  const p = document.createElement('p');
+  p.className = 'empty-note';
+  p.style.padding = '1rem';
+  p.textContent = text;
+  return p;
+}
+
+function renderSyncReport(report, { preview }) {
+  const planned = report.planned;
+  const cells = [
+    ['To the drive', planned.toTarget],
+    ['Back to library', planned.toSource],
+    ['Removed there', planned.deleteOnTarget],
+    ['Removed here', planned.deleteOnSource],
+    ['Conflicts', planned.conflicts],
+  ];
+
+  const grid = $('syncPreviewGrid');
+  grid.textContent = '';
+  for (const [label, value] of cells) {
+    const cell = document.createElement('div');
+    cell.className = 'stat';
+    cell.innerHTML = '<div class="stat__value"></div><div class="stat__label"></div>';
+    cell.querySelector('.stat__value').textContent = String(value);
+    cell.querySelector('.stat__label').textContent = label;
+    grid.append(cell);
+  }
+
+  const list = $('syncPreviewList');
+  list.textContent = '';
+
+  if (report.firstRun && preview) {
+    list.append(noteEl('This drive has not been synced before, so nothing will be deleted '
+      + 'on this run — the two sides are merged instead.'));
+  }
+
+  const actions = report.actions || report.applied || [];
+  if (!actions.length && !report.firstRun) {
+    list.append(noteEl('Nothing to do — both sides already match.'));
+  }
+
+  // Deletions first. They are the only thing here that looks irreversible,
+  // and burying them under a hundred copies is how someone approves one blind.
+  const ordered = [...actions].sort((a, b) => rankAction(a) - rankAction(b));
+  for (const action of ordered.slice(0, 300)) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="row__main"><div class="row__title"></div>'
+      + '<div class="row__sub"></div></div>';
+    row.querySelector('.row__title').textContent = action.path;
+    row.querySelector('.row__sub').textContent = describeAction(action);
+    list.append(row);
+  }
+  if (ordered.length > 300) list.append(noteEl(`…and ${ordered.length - 300} more.`));
+
+  const skipped = report.skipped || [];
+  $('syncPreviewSkipped').textContent = skipped.length
+    ? `${skipped.length} file${skipped.length === 1 ? '' : 's'} skipped: ${skipped[0].reason}`
+    : '';
+}
+
+function rankAction(action) {
+  if (action.type === 'delete') return 0;
+  if (action.type === 'conflict-keep-both' || action.conflict) return 1;
+  return 2;
+}
+
+function describeAction(action) {
+  if (action.type === 'delete') {
+    return action.side === 'target'
+      ? 'Removed from the drive (moved to its trash folder)'
+      : 'Removed from the library (moved to the trash folder)';
+  }
+  if (action.type === 'conflict-keep-both') {
+    return `Changed in both places — the drive's version is kept as "${action.keepAs}"`;
+  }
+  return action.direction === 'to-target'
+    ? `Copied to the drive — ${action.reason}`
+    : `Copied back to the library — ${action.reason}`;
+}
+
+async function runSyncNow(target) {
+  const ok = confirm(`Run "${target.label}" now?\n\n`
+    + 'Anything it removes goes to a trash folder on that side, so it can be recovered.');
+  if (!ok) return;
+
+  runningSyncIds.add(target.id);
+  $('syncConfirmBtn').disabled = true;
+  $('syncNote').textContent = `Syncing "${target.label}"…`;
+  renderSyncTargets((await window.lanshare.sync.list()).targets);
+
+  try {
+    const result = await window.lanshare.sync.run(target.id);
+    if (!result.ok) {
+      $('syncNote').textContent = '';
+      alert(result.error);
+      return;
+    }
+
+    const report = result.report;
+    $('syncPreviewTitle').textContent = `What "${target.label}" did`;
+    renderSyncReport(report, { preview: false });
+
+    $('syncNote').textContent = report.stoppedEarly
+      ? 'The drive was disconnected part-way through. Nothing was lost — reconnect it and run again to finish.'
+      : report.failed.length
+        ? `Finished, but ${report.failed.length} file${report.failed.length === 1 ? '' : 's'} could not be copied.`
+        : 'Finished.';
+  } catch (err) {
+    $('syncNote').textContent = '';
+    alert(`The sync did not finish: ${err.message}`);
+  } finally {
+    runningSyncIds.delete(target.id);
+    await loadSync();
+  }
+}
+
+$('syncCancelBtn').addEventListener('click', hideSyncPreview);
+
+function hideSyncPreview() {
+  previewingSyncId = null;
+  $('syncPreviewCard').hidden = true;
+}
+
+window.lanshare.sync.onProgress(({ id, done, total }) => {
+  if (!runningSyncIds.has(id)) return;
+  $('syncNote').textContent = `Syncing — ${done} of ${total}…`;
 });
