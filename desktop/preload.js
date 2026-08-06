@@ -48,6 +48,22 @@ contextBridge.exposeInMainWorld('lanshare', {
     bringHome: (album) => invoke('locations:bringHome', album),
   },
 
+  sync: {
+    list: () => invoke('sync:list'),
+    albums: () => invoke('sync:albums'),
+    add: (input) => invoke('sync:add', input),
+    update: (id, patch) => invoke('sync:update', { id, patch }),
+    remove: (id) => invoke('sync:remove', id),
+    preview: (id) => invoke('sync:run', { id, dryRun: true }),
+    run: (id) => invoke('sync:run', { id, dryRun: false }),
+    /** Fires while a sync runs, so the screen can show it moving. */
+    onProgress: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('sync-progress', listener);
+      return () => ipcRenderer.removeListener('sync-progress', listener);
+    },
+  },
+
   vaults: {
     list: () => invoke('vaults:list'),
     unlock: (path, secret) => invoke('vaults:unlock', { path, ...secret }),

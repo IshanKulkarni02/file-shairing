@@ -39,6 +39,8 @@ const sessions = require('../lib/sessions');
 const library = require('../lib/library');
 const vaults = require('../lib/vaults');
 const locations = require('../lib/locations');
+const syncTargets = require('../lib/sync-targets');
+const syncEngine = require('../lib/sync');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -247,7 +249,9 @@ function guarded(fn) {
       if (err instanceof accounts.AccountError
         || err instanceof library.LibraryError
         || err instanceof vaults.VaultStateError
-        || err instanceof locations.LocationError) {
+        || err instanceof locations.LocationError
+        || err instanceof syncTargets.SyncTargetError
+        || err instanceof syncEngine.SyncError) {
         return { ok: false, error: err.message };
       }
       throw err;
@@ -402,6 +406,101 @@ ipcMain.handle('locations:relocate', guarded(async (event, { album, locationId }
 
 ipcMain.handle('locations:bringHome', guarded(async (event, album) =>
   ({ result: await locations.bringAlbumHome(libraryPath(), config, album) })));
+
+// --- syncing to a drive ----------------------------------------------------
+
+ipcMain.handle('sync:list', () => ({
+  targets: syncTargets.list(config, libraryPath()),
+  policies: syncTargets.POLICIES,
+  running: [...runningSyncs.keys()],
+}));
+
+/** Top-level albums a sync could be set up for, plus the whole library. */
+ipcMain.handle('sync:albums', () => {
+  const lib = libraryPath();
+  let entries = [];
+  try {
+    entries = fs.readdirSync(lib, { withFileTypes: true });
+  } catch {
+    return [{ path: '/', name: 'Everything in the library' }];
+  }
+  const albums = entries
+    .filter((e) => !e.name.startsWith('.'))
+    // A junction is a relocated album, and still a perfectly good thing to
+    // sync — it just is not reported as a directory.
+    .filter((e) => e.isDirectory() || e.isSymbolicLink())
+    .map((e) => ({ path: `/${e.name}`, name: e.name }));
+  return [{ path: '/', name: 'Everything in the library' }, ...albums];
+});
+
+ipcMain.handle('sync:add', guarded((event, input) => {
+  const target = syncTargets.add(config, libraryPath(), input || {});
+  configLib.save(config);
+  return { target };
+}));
+
+ipcMain.handle('sync:update', guarded((event, { id, patch }) => {
+  const target = syncTargets.update(config, id, patch || {});
+  configLib.save(config);
+  return { target };
+}));
+
+ipcMain.handle('sync:remove', guarded((event, id) => {
+  syncTargets.remove(config, id);
+  configLib.save(config);
+  return {};
+}));
+
+/** Syncs in flight, by target id — see the same guard in lib/server-app.js. */
+const runningSyncs = new Map();
+
+ipcMain.handle('sync:run', guarded(async (event, { id, dryRun }) => {
+  if (!dryRun && runningSyncs.has(id)) {
+    throw new syncTargets.SyncTargetError('That sync is already running', 409);
+  }
+
+  const resolved = syncTargets.resolveForRun(config, libraryPath(), id, { create: !dryRun });
+  const work = syncEngine.run({
+    library: libraryPath(),
+    sourceDir: resolved.sourceDir,
+    targetDir: resolved.targetDir,
+    driveRoot: resolved.driveRoot,
+    targetId: resolved.targetId,
+    policy: resolved.policy,
+    conflictLabel: resolved.conflictLabel,
+    dryRun: Boolean(dryRun),
+    onProgress: dryRun ? null : throttledProgress(id),
+  });
+
+  if (!dryRun) runningSyncs.set(id, work);
+  try {
+    const report = await work;
+    if (!dryRun) {
+      syncTargets.recordRun(config, id, report);
+      configLib.save(config);
+    }
+    return { report };
+  } finally {
+    if (!dryRun) runningSyncs.delete(id);
+  }
+}));
+
+/**
+ * The engine reports every action; the window does not need that many.
+ * Throttling here rather than in the engine keeps the engine's hook precise
+ * enough to test mid-run interruption with.
+ */
+function throttledProgress(id) {
+  let last = 0;
+  return (progress) => {
+    const now = Date.now();
+    if (now - last < 200 && progress.done !== progress.total) return;
+    last = now;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('sync-progress', { id, ...progress });
+    }
+  };
+}
 
 // --- settings --------------------------------------------------------------
 
