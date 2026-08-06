@@ -52,12 +52,12 @@
       "node_modules/@img/**/*",
       "node_modules/sharp/**/*"
     ],
-    "extraResources": [
-      { "from": "vendor/ffmpeg", "to": "ffmpeg", "filter": ["**/*"] }
-    ],
     "win": {
       "target": "nsis",
-      "icon": "desktop/ui/icon.png"
+      "icon": "desktop/ui/icon.png",
+      "extraResources": [
+        { "from": "vendor/ffmpeg", "to": "ffmpeg", "filter": ["**/*"] }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -66,6 +66,43 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "LANShare"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "category": "public.app-category.photography",
+      "icon": "desktop/ui/icon.png",
+      "darkModeSupport": true,
+      "extraResources": [
+        { "from": "vendor/ffmpeg-mac", "to": "ffmpeg", "filter": ["**/*"] }
+      ]
+    },
+    "dmg": {
+      "title": "LANShare"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Graphics",
+      "icon": "desktop/ui/icon.png",
+      "synopsis": "Share your photo and video library on your network",
+      "extraResources": [
+        { "from": "vendor/ffmpeg-linux", "to": "ffmpeg", "filter": ["**/*"] }
+      ]
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "ffmpeg"
+      ]
     }
   },
   "dependencies": {

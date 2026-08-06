@@ -41,6 +41,7 @@ const vaults = require('../lib/vaults');
 const locations = require('../lib/locations');
 const syncTargets = require('../lib/sync-targets');
 const syncEngine = require('../lib/sync');
+const autostart = require('../lib/autostart');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -111,6 +112,26 @@ function libraryPath() {
  * The renderer is sandboxed and cannot require('qrcode') itself, so the QR
  * image is rendered here, as a data URL the <img> tag can use directly.
  */
+/**
+ * Register or unregister start-on-login with the OS.
+ *
+ * Never fatal: on Linux this writes a file, and a read-only or unusual home
+ * directory should cost you the setting, not the app.
+ */
+function applyAutostart(enabled) {
+  try {
+    return autostart.set(enabled, {
+      app,
+      execPath: process.execPath,
+      appPath: app.getAppPath(),
+      packaged: app.isPackaged,
+    });
+  } catch (err) {
+    console.error('[autostart]', err.message);
+    return null;
+  }
+}
+
 async function currentStatus() {
   const addresses = net.lanAddresses().map((a) => a.address);
   const primary = addresses[0] || '127.0.0.1';
@@ -177,12 +198,31 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
+/**
+ * Create the tray icon, if this desktop has one.
+ *
+ * A Linux session without an AppIndicator implementation — GNOME without the
+ * extension, or a minimal window manager — has no tray at all, and Electron
+ * throws rather than degrading. That matters beyond a missing icon: with
+ * close-to-tray on, closing the window would hide it somewhere unreachable,
+ * so the setting is forced off when there is nowhere to hide to.
+ */
 function createTray() {
-  const icon = nativeImage.createFromPath(path.join(__dirname, 'ui', 'icon.png'));
-  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
-  tray.setToolTip('LANShare');
-  tray.on('click', showWindow);
-  refreshTrayMenu();
+  try {
+    const icon = nativeImage.createFromPath(path.join(__dirname, 'ui', 'icon.png'));
+    tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
+    tray.setToolTip('LANShare');
+    tray.on('click', showWindow);
+    refreshTrayMenu();
+  } catch (err) {
+    tray = null;
+    console.error('[tray] no system tray available:', err.message);
+    if (config.closeToTray) {
+      config.closeToTray = false;
+      configLib.save(config);
+      console.error('[tray] close-to-tray turned off, or the window would vanish with no way back');
+    }
+  }
 }
 
 function refreshTrayMenu() {
@@ -537,10 +577,10 @@ ipcMain.handle('settings:update', async (event, patch) => {
 
   if (patch.startOnLogin !== undefined) {
     config.startOnLogin = Boolean(patch.startOnLogin);
-    // Electron's own login-item API — no extra dependency, and it is what
-    // actually registers with Windows (or macOS); just storing the setting
-    // in config.json would not make the OS do anything.
-    app.setLoginItemSettings({ openAtLogin: config.startOnLogin });
+    // Electron's login-item API covers Windows and macOS but does nothing at
+    // all on Linux — silently, so the checkbox would tick and nothing would
+    // ever start. lib/autostart.js writes the XDG entry there instead.
+    applyAutostart(config.startOnLogin);
   }
 
   configLib.save(config);
