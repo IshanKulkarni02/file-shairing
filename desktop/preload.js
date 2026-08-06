@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('lanshare', {
   openLibraryFolder: () => invoke('library:open'),
   quit: () => invoke('app:quit'),
   pickFolder: () => invoke('dialog:pickFolder'),
+  pickLibraryFiles: () => invoke('dialog:pickLibraryFiles'),
   copyToClipboard: (text) => invoke('clipboard:copy', text),
 
   accounts: {
@@ -67,6 +68,20 @@ contextBridge.exposeInMainWorld('lanshare', {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on('sync-changed', listener);
       return () => ipcRenderer.removeListener('sync-changed', listener);
+    },
+  },
+
+  connections: {
+    list: () => invoke('connections:list'),
+    add: (input) => invoke('connections:add', input),
+    remove: (id) => invoke('connections:remove', id),
+    browse: (id, path, password) => invoke('connections:browse', { id, path, password }),
+    copy: (input) => invoke('connections:copy', input),
+    /** Fires as files move between this machine and another. */
+    onProgress: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('transfer-progress', listener);
+      return () => ipcRenderer.removeListener('transfer-progress', listener);
     },
   },
 
