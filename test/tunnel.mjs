@@ -136,6 +136,15 @@ try {
     });
     check('signing in works over the tunnel', login.status === 200, `got ${login.status}`);
 
+    // Everything through the tunnel reaches the local server over loopback,
+    // so without a marker a visitor from the internet would be recorded as
+    // sitting at the keyboard — on the Devices screen, and in the login
+    // throttle, where a remote guesser could then lock the owner out.
+    const sessions = require(path.join(here, '..', 'lib', 'sessions.js'));
+    check('a session opened over the internet is not recorded as local',
+      sessions.list('admin').some((s) => /internet/i.test(s.ip)),
+      JSON.stringify(sessions.list('admin').map((s) => s.ip)));
+
     const listing = await client.call('/api/list?path=%2FPrivate');
     check('the library can be listed over the tunnel', listing.status === 200);
     check('and shows the file',
