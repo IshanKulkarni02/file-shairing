@@ -1149,3 +1149,16 @@ window.lanshare.sync.onProgress(({ id, done, total }) => {
   if (!runningSyncIds.has(id)) return;
   $('syncNote').textContent = `Syncing — ${done} of ${total}…`;
 });
+
+// A sync that starts on its own, because its drive was plugged in, has to
+// show up here too — otherwise the app looks idle while it copies gigabytes.
+window.lanshare.sync.onChanged(({ running }) => {
+  runningSyncIds.clear();
+  for (const id of running || []) runningSyncIds.add(id);
+
+  if (!$('panel-sync').classList.contains('is-active')) return;
+  $('syncNote').textContent = running?.length
+    ? 'A drive was connected — syncing automatically…'
+    : '';
+  loadSync();
+});

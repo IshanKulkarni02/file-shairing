@@ -20,7 +20,7 @@ the internet without port forwarding.
 | A | Desktop control panel, accounts, permissions, sessions | **Done** |
 | B | Encrypted vaults | **Done** |
 | C | Storage across drives | **Done** |
-| D | Sync | Not started |
+| D | Sync | **Done** |
 | E | macOS and Linux | Not started |
 | F | Client mode — connect to other hosts | Not started |
 | G | P2P over the internet | Not started |
@@ -118,8 +118,12 @@ prove them. Current suites, all run against a live server:
 | `test/locations.mjs` | albums living on other drives: real cross-volume relocation, link removal guards, dangling links, a self-referential link not looping a walk, and a failed bring-home leaving no hidden staging copy |
 | `test/location-routes.mjs` | locations over HTTP: registering a drive, relocating an album, that album still downloading, listing, and accepting uploads on its original path, an unplugged drive surfacing as unreachable rather than empty, and reconnecting needing no repair step |
 | `test/electron-links.js` | link creation and removal **inside an Electron runtime** — run with `npx electron test/electron-links.js`, not Node |
+| `test/sync-plan.mjs` | what a sync decides: all nine source/target verdict combinations enumerated, first-run safety, conflict policies, case-only name collisions, and a multi-round simulation proving a deletion stays deleted and a conflict does not loop |
+| `test/sync.mjs` | carrying a plan out against real files: mtimes preserved, deletions recoverable from trash, encrypted files copied without ever being opened, links not followed, a drive pulled mid-run resuming cleanly, and a corrupt baseline never reading as deletions |
+| `test/sync-routes.mjs` | syncs over HTTP: setting one up, the guards on where it can point, a preview that writes nothing at all, a real run, a change made on the drive coming back, a deletion propagating and staying gone, and a viewer being refused |
+| `test/sync-watcher.mjs` | running on connect: an already-connected drive is not an arrival, a replug runs again, an unrelated drive does not, a failure is not retried every tick, and overlapping ticks start one run |
 
-All 15 suites, 432 checks, pass together as of the Phase C merge.
+All 19 suites, 594 checks, pass together as of the Phase D merge.
 (`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
 the standard sweep — one needs the HTTPS listener, the other moves a
 gigabyte. `test/electron-links.js` needs an Electron runtime, for the reason
@@ -267,6 +271,68 @@ every existing suite green:
 The renderer had a matching gap: an IPC rejection left the status note on
 "Copying…" forever with nothing saying why. Both directions now surface the
 error.
+
+---
+
+## Phase D — sync (done)
+
+Two-way sync between an album and a folder on a registered drive, running on
+demand or when the drive is plugged in. Built in four layers, riskiest first.
+
+**`lib/sync-plan.js` decides; nothing else does.** No filesystem access at
+all. This is the one place in the app where a wrong answer destroys photos,
+and a pure function is the only part of it that can be tested exhaustively.
+
+**Three states, not two.** Source-versus-target cannot tell "added here" from
+"deleted there" — they are the same observation — which is why naive two-way
+sync resurrects every file you delete. Each run also compares against the
+baseline recorded after the last successful run, so a file is deleted only
+when the baseline vouches it was there last time and one side has since
+removed it. No baseline means a first run: nothing is deleted, the two sides
+are merged.
+
+The baseline is built by re-listing both sides **after** the run, never from
+what the plan intended, so it cannot claim a file matched when it did not.
+That imposes one requirement on the runner: it must preserve modification
+times, or the next run sees the whole library as changed on both sides.
+
+**`lib/sync.js` does it, carefully.** Nothing is hard-deleted — deletions go
+to a stamped trash folder on the side being changed. Copies are written
+beside the destination and renamed in, so a drive pulled mid-copy leaves the
+old file or the new one, never half. Encrypted files are copied as bytes and
+never opened, which is the whole reason an encrypted album is safe on a drive
+you lose. Links are skipped rather than followed: a relocated album points at
+another drive, and following it would copy that drive into the target behind
+your back.
+
+**`lib/sync-watcher.js` starts it on connect** by polling volume ids rather
+than listening for device events — duller, but identical on all three
+platforms, and it survives the app being asleep when the drive went in. Only
+absent→present counts as an arrival, and a failure is not retried until the
+drive is genuinely replugged.
+
+**Decisions worth not relitigating:**
+
+- **keep-both is the default** because it is the only policy that cannot lose
+  work. `newest-wins` is offered with its cost stated where it is chosen: Mac
+  and PC clocks disagree often enough to keep the wrong version.
+- **Deleted here, edited there → the file comes back.** Keeping it is the
+  recoverable mistake.
+- **Names differing only in capitalisation are skipped, not guessed at.**
+  Linux keeps `Photo.jpg` and `photo.jpg` apart; Windows and macOS do not, so
+  syncing between them would have one silently overwrite the other with the
+  survivor decided by iteration order. Phase E makes this a live path.
+- **Previews are the same call as the run**, with `dryRun` set, so what is
+  shown cannot drift from what happens. Deletions are listed first — burying
+  them under a hundred copies is how someone approves one blind.
+
+**A bug found by driving the real UI, not by the tests:** a *preview* created
+a folder on the drive, because target resolution mkdir'd unconditionally and
+the engine's own dry-run test never went through that layer. **Third time an
+audit has found a bug in the seam between two well-tested modules** (after
+the vault-blind routes in Phase B and the junction listing in Phase C). The
+pattern is now reliable enough to plan around: when two modules are each
+tested and then joined, test the join specifically.
 
 ---
 

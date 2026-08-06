@@ -62,6 +62,12 @@ contextBridge.exposeInMainWorld('lanshare', {
       ipcRenderer.on('sync-progress', listener);
       return () => ipcRenderer.removeListener('sync-progress', listener);
     },
+    /** Fires when a sync starts or ends on its own, because a drive appeared. */
+    onChanged: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('sync-changed', listener);
+      return () => ipcRenderer.removeListener('sync-changed', listener);
+    },
   },
 
   vaults: {

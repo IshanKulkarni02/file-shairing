@@ -70,6 +70,18 @@ function serialize(fn) {
 async function startServerImpl() {
   if (serverHandle) return serverHandle;
   serverHandle = await serverApp.start(config);
+
+  // A sync the watcher starts on its own has to show up on the Sync screen,
+  // or the app looks idle while it is busy copying gigabytes.
+  if (serverHandle.syncWatcher) {
+    serverHandle.syncWatcher.onChange = () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('sync-changed', {
+          running: serverHandle.syncWatcher.runningIds(),
+        });
+      }
+    };
+  }
   return serverHandle;
 }
 
