@@ -129,7 +129,7 @@ prove them. Current suites, all run against a live server:
 | `test/volume-parsers.mjs` | reading real recorded diskutil and lsblk output, so the macOS and Linux paths are covered from any machine |
 | `test/autostart.mjs` | start-on-login per platform, especially the Linux XDG entry Electron does not write |
 
-All 25 suites, 773 checks, pass together as of the Phase G merge.
+All 25 suites, 798 checks, pass together as of the post-Phase-G audit.
 (`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
 the standard sweep — one needs the HTTPS listener, the other moves a
 gigabyte. `test/electron-links.js` needs an Electron runtime, for the reason
@@ -522,6 +522,46 @@ connections — a LAN transfer is far faster and should be preferred when both
 machines are home. The pairing code *is* the key: anyone holding it can reach
 that library, which the UI says at the moment of sharing. Turning internet
 access off issues a new code and invalidates the old one.
+
+---
+
+## Post-hoc audit of Phases D–G (2026-08-06)
+
+Read critically rather than re-run. Four real bugs, none of which a green
+suite would ever have surfaced:
+
+- **A 25 MB video could not cross the tunnel at all**, in either direction —
+  the frame ceiling is 16 MB and nothing split larger messages. For a photo
+  *and video* library reached from elsewhere, that is the main thing someone
+  would want it for. The tunnel test only ever moved 300 KB. Messages are now
+  split across frames and reassembled; tests move 9 MB both ways.
+- **A first sync to a folder that did not exist yet aborted on its first
+  action**, reporting that the drive had been disconnected — about a drive
+  that was plugged in throughout. The liveness check watched this sync's own
+  folder rather than the drive. Masked in normal use because the
+  target-resolution layer creates the folder first, so only a direct caller
+  hit it.
+- **Every visitor arriving over the relay was recorded as `127.0.0.1`**,
+  because tunnelled requests are replayed against the local server over
+  loopback. That put remote logins in the same throttle bucket as someone at
+  the keyboard — so a remote guesser with a leaked pairing code could lock the
+  owner out of their own machine — and showed remote sessions on the Devices
+  screen as local, which is exactly the screen you would check if you were
+  worried about one. Now marked at the tunnel and trusted only from loopback.
+- **Deleting a relocated album trashed only the link**, stranding its real
+  contents on the drive (recorded under Phase C above).
+
+Also confirmed sound while looking: an encrypted album syncs with its vault
+metadata intact, its files arrive as ciphertext, and the plaintext appears
+nowhere on the drive — a copy without that metadata could never be opened, and
+nothing would have said so. That is now a test.
+
+**The pattern holds.** Every audit so far has found bugs in the seam between
+two individually well-tested things: vault routes and plain routes (B),
+junctions and listings (C), the engine and its resolution layer (D), the
+frame size and a real file (G). Re-running a green suite has never once found
+one of these. The rule earned four times over: **when two tested things are
+joined, test the join, with realistic inputs.**
 
 ---
 
