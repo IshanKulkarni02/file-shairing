@@ -196,6 +196,77 @@ try {
   check('repair reports the broken link rather than throwing',
     repair.broken.some((b) => b.name === 'Ghost'), JSON.stringify(repair));
 
+  // --- deleting an album that lives on another drive -----------------------
+  // Trashing only the link would leave the real contents on that drive with
+  // nothing pointing at them: not deleted, just invisible and permanent.
+
+  {
+    const delBase = tempDir('lanshare-deldrive-');
+    const delLib = path.join(delBase, 'library');
+    const delDrive = path.join(delBase, 'drive');
+    mkdirSync(delLib);
+    mkdirSync(delDrive);
+    makeAlbum(path.join(delLib, 'Gone'));
+
+    const delConfig = {};
+    const delLoc = locations.add(delConfig, { label: 'Del Drive', targetPath: delDrive });
+    await locations.relocateAlbum(delLib, delConfig, 'Gone', delLoc.id);
+
+    const [firstName, firstBody] = Object.entries(ALBUM_FILES)[0];
+    const result = await locations.trashAlbum(delLib, delConfig, 'Gone', 'stamp-1');
+
+    check('a relocated album can be deleted', !existsSync(path.join(delLib, 'Gone')));
+    check('and nothing is left orphaned on the drive',
+      !existsSync(path.join(delDrive, 'Gone')), 'the album is still sitting on the drive');
+    check('its contents go to a trash folder on that same drive',
+      existsSync(path.join(delDrive, locations.DRIVE_TRASH, 'stamp-1', 'Gone', firstName)),
+      result.trashedTo);
+    check('and are still readable there',
+      readFileSync(path.join(delDrive, locations.DRIVE_TRASH, 'stamp-1', 'Gone', firstName), 'utf8')
+        === firstBody);
+
+    // The drive can then be let go of, which it could not while it still held
+    // an album the library believed in.
+    let removeError = null;
+    try { locations.remove(delConfig, delLib, delLoc.id); } catch (err) { removeError = err; }
+    check('and the drive can be removed afterwards', removeError === null, removeError?.message);
+  }
+
+  {
+    // Deleting what you cannot reach is not something to fake.
+    const offBase = tempDir('lanshare-deloff-');
+    const offLib = path.join(offBase, 'library');
+    const offDrive = path.join(offBase, 'drive');
+    mkdirSync(offLib);
+    mkdirSync(offDrive);
+    makeAlbum(path.join(offLib, 'Away'));
+
+    const offConfig = {};
+    const offLoc = locations.add(offConfig, { label: 'Away Drive', targetPath: offDrive });
+    await locations.relocateAlbum(offLib, offConfig, 'Away', offLoc.id);
+
+    // Unplug it.
+    rmSync(path.join(offDrive, 'Away'), { recursive: true, force: true });
+
+    await expectReject('deleting an album on a disconnected drive is refused',
+      () => locations.trashAlbum(offLib, offConfig, 'Away'), /not connected/i);
+    check('and the album is left exactly as it was',
+      locations.isLink(path.join(offLib, 'Away')));
+  }
+
+  {
+    // The guard that stops this being a way to delete an ordinary album by
+    // the wrong route.
+    const plainBase = tempDir('lanshare-delplain-');
+    const plainLib = path.join(plainBase, 'library');
+    mkdirSync(plainLib);
+    makeAlbum(path.join(plainLib, 'Ordinary'));
+
+    await expectReject('an album that is not on another drive is refused here',
+      () => locations.trashAlbum(plainLib, {}, 'Ordinary'), /not on another drive/i);
+    check('and is untouched', existsSync(path.join(plainLib, 'Ordinary')));
+  }
+
   // --- a failed bring-home leaves nothing behind ---------------------------
   // Bringing an album home copies it into a hidden staging folder first. If
   // the swap then fails, that copy is as large as the album and invisible in

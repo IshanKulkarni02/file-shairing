@@ -6,7 +6,7 @@
  *   node test/location-routes.mjs <adminPassword> [baseUrl]
  */
 
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -176,6 +176,42 @@ try {
   res = await req('/api/list?path=/');
   const backHome = (await res.json()).folders?.find((f) => f.name === ALBUM);
   check('the root listing no longer flags it as elsewhere', !backHome?.storage, JSON.stringify(backHome));
+
+  // --- deleting an album that lives on another drive -------------------------
+  // The ordinary delete would trash only the link, stranding the real files
+  // on the drive with nothing pointing at them.
+
+  {
+    const DEL = `Deleted-${RUN}`;
+    await req('/api/mkdir', json({ path: '/', name: DEL }));
+    const delForm = new FormData();
+    delForm.append('file', new Blob([Buffer.from('about to be deleted')]), 'doomed.txt');
+    await req(`/api/upload?dir=${q('/' + DEL)}&rel=doomed.txt`, { method: 'POST', body: delForm });
+    await req('/api/locations/relocate', json({ path: `/${DEL}`, locationId }));
+    check('set up a relocated album to delete',
+      existsSync(path.join(TARGET, DEL, 'doomed.txt')));
+
+    res = await req('/api/delete', json({ paths: [`/${DEL}`] }));
+    check('a relocated album deletes', res.status === 200, `got ${res.status}`);
+
+    res = await req('/api/list?path=/');
+    check('and is gone from the library',
+      !(await res.json()).folders?.some((f) => f.name === DEL));
+
+    check('nothing is left orphaned on the drive',
+      !existsSync(path.join(TARGET, DEL)), 'the album is still on the drive');
+
+    // Recoverable, like every other delete in this app.
+    const driveTrash = path.join(TARGET, '.lanshare-trash');
+    const stamps = existsSync(driveTrash) ? readdirSync(driveTrash) : [];
+    const recovered = stamps
+      .map((s) => path.join(driveTrash, s, DEL, 'doomed.txt'))
+      .find((p) => existsSync(p));
+    check('but it is recoverable from a trash folder on that drive',
+      Boolean(recovered), `looked in ${driveTrash}`);
+    check('and still readable',
+      recovered && readFileSync(recovered, 'utf8') === 'about to be deleted');
+  }
 
   // --- guards ----------------------------------------------------------------
 
