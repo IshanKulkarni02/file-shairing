@@ -45,6 +45,7 @@ const syncTargets = require('../lib/sync-targets');
 const syncEngine = require('../lib/sync');
 const autostart = require('../lib/autostart');
 const connections = require('../lib/connections');
+const tunnel = require('../lib/tunnel');
 const paths = require('../lib/paths');
 
 const { config, generated } = configLib.loadOrCreate();
@@ -576,9 +577,13 @@ ipcMain.handle('connections:list', () => ({
 }));
 
 ipcMain.handle('connections:add', guarded(async (event, input) => {
-  const record = await connections.add(config, input || {}, { secrets: secretStore() });
+  // A pairing code means the machine is somewhere else entirely and is
+  // reached through a relay; an address means it is on this network.
+  const record = input?.code
+    ? await connections.addByCode(config, input, { secrets: secretStore() })
+    : await connections.add(config, input || {}, { secrets: secretStore() });
   configLib.save(config);
-  return { connection: { id: record.id, label: record.label, base: record.base } };
+  return { connection: { id: record.id, label: record.label, via: record.via || 'lan' } };
 }));
 
 ipcMain.handle('connections:remove', guarded((event, id) => {
@@ -637,6 +642,81 @@ async function openConnection(id, password) {
   openConnections.set(id, host);
   configLib.save(config);
   return host;
+}
+
+// --- being reachable over the internet -------------------------------------
+
+/** The tunnel advertising this machine through a relay, when one is on. */
+let tunnelHost = null;
+
+ipcMain.handle('tunnel:status', () => ({
+  enabled: Boolean(config.relay?.enabled),
+  relayHost: config.relay?.host || '',
+  relayPort: config.relay?.port || 8460,
+  // The code is the key to this library. It is shown on request, never
+  // volunteered, and never written to config.json.
+  connected: Boolean(tunnelHost?.channel),
+}));
+
+ipcMain.handle('tunnel:enable', guarded(async (event, { relayHost: host, relayPort }) => {
+  if (!host || !String(host).trim()) {
+    throw new connections.ConnectionError('Enter the address of your relay');
+  }
+
+  const pairing = tunnel.createPairing();
+  config.relay = {
+    enabled: true,
+    host: String(host).trim(),
+    port: Number(relayPort) || 8460,
+    // Kept in the keychain, not in config.json — anyone holding this code can
+    // reach the library, so it is exactly as sensitive as a password.
+    secret: secretStore().available ? secretStore().encrypt(pairing.code) : null,
+  };
+  configLib.save(config);
+
+  await restartTunnel(pairing);
+  return { code: pairing.code };
+}));
+
+ipcMain.handle('tunnel:disable', guarded(() => {
+  tunnelHost?.stop();
+  tunnelHost = null;
+  if (config.relay) config.relay.enabled = false;
+  configLib.save(config);
+  return {};
+}));
+
+/** Show the existing code again, for pairing a second device. */
+ipcMain.handle('tunnel:code', guarded(() => {
+  const code = secretStore().decrypt(config.relay?.secret);
+  if (!code) {
+    throw new connections.ConnectionError(
+      'The pairing code is not readable on this computer. Turn internet access off and '
+      + 'on again to issue a new one — the old one will stop working.',
+    );
+  }
+  return { code };
+}));
+
+async function restartTunnel(pairing) {
+  tunnelHost?.stop();
+  tunnelHost = null;
+  if (!config.relay?.enabled) return;
+
+  const code = pairing || (() => {
+    const saved = secretStore().decrypt(config.relay.secret);
+    return saved ? tunnel.parsePairing(saved) : null;
+  })();
+  if (!code) return;
+
+  tunnelHost = new tunnel.TunnelHost({
+    relayHost: config.relay.host,
+    relayPort: config.relay.port,
+    pairing: code,
+    localPort: config.port,
+    log: (message) => console.log(`[tunnel] ${message}`),
+  });
+  tunnelHost.start();
 }
 
 let cachedSecretStore = null;
@@ -737,6 +817,12 @@ app.whenReady().then(async () => {
   });
 
   await startServer();
+
+  // If internet access was left on, start advertising again — otherwise a
+  // machine you rely on reaching from elsewhere goes quiet after a reboot,
+  // and there is nobody there to notice.
+  restartTunnel().catch((err) => console.error('[tunnel]', err.message));
+
   refreshTrayMenu();
   await windowReady;
   notifyRenderer();

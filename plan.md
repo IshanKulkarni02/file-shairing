@@ -23,7 +23,7 @@ the internet without port forwarding.
 | D | Sync | **Done** |
 | E | macOS and Linux | **Code done**, unverified on real hardware |
 | F | Client mode — connect to other hosts | **Done** |
-| G | P2P over the internet | Not started |
+| G | P2P over the internet | **Done** (relay; hole punching not attempted) |
 
 ---
 
@@ -129,7 +129,7 @@ prove them. Current suites, all run against a live server:
 | `test/volume-parsers.mjs` | reading real recorded diskutil and lsblk output, so the macOS and Linux paths are covered from any machine |
 | `test/autostart.mjs` | start-on-login per platform, especially the Linux XDG entry Electron does not write |
 
-All 24 suites, 891 checks, pass together as of the Phase F merge.
+All 25 suites, 773 checks, pass together as of the Phase G merge.
 (`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
 the standard sweep — one needs the HTTPS listener, the other moves a
 gigabyte. `test/electron-links.js` needs an Electron runtime, for the reason
@@ -460,6 +460,60 @@ port scan would reveal anyway — never library contents, account names or keys.
   visible — the features simply did nothing, silently. **A third pattern to
   watch alongside the seam rule: an optional-chained property that is always
   absent looks exactly like a feature that is off.**
+
+---
+
+## Phase G — over the internet, no port forwarding (done)
+
+Both machines connect **out** to a relay, which is why neither needs anything
+opened on its router: routers have always allowed outbound connections.
+
+**The decision this phase was waiting on.** The plan offered hole-punched
+WebRTC with a TURN relay as fallback, or Tailscale and no code at all. This
+builds the relay and not the punching. Punching lets peers talk directly and
+is faster, but it needs a WebRTC stack, fails outright on symmetric NAT, and
+*requires a relay as the fallback anyway*. Building the fallback first means
+the feature works everywhere today, and direct connections can be added later
+without changing the protocol above that line. Tailscale remains a perfectly
+good answer for anyone who would rather not run anything at all — that option
+has not gone away.
+
+**The relay is as untrusted as it can be.** It pairs two connections naming
+the same room, copies bytes, and understands nothing else. Every frame is
+sealed with AES-256-GCM under a key derived from the pairing code, which is
+exchanged out of band and never reaches the relay. A hostile relay operator
+can cut a connection and see that two peers are talking; they cannot read a
+password, a photo, a filename, or even which URL was requested. The test
+proves that rather than asserting it: it records every byte crossing the relay
+and checks the plaintext marker, the password and the request path are all
+absent.
+
+**The host replays tunnelled requests against its own server over localhost**
+rather than injecting into Express directly, so every route, permission check
+and vault rule already applies. A second path into the app would be a second
+place for all of that to be got wrong.
+
+**A relayed host wears the same interface as a direct one**, so browsing,
+copying and the Machines screen work without knowing which they hold. The test
+proves it by running the copy helper, unchanged, over the relay.
+
+**Three bugs found by running it rather than reading it:**
+
+- The relay's `paired` flag was a per-connection local, so only the peer that
+  *completed* the pairing ever saw it. The other went on treating real traffic
+  as a hello and hung up on the first frame.
+- A refused impostor's own disconnect tore down the room it had just been
+  refused entry to, because `roomId` was assigned before the occupancy check.
+  Anyone who learned a room id could cut a live session off.
+- `TunnelHost.start()` awaited the pairing, so a host could not finish
+  starting until a client arrived, and no client could arrive until it had.
+
+**Known limits, stated rather than discovered:** traffic goes through the
+relay, so throughput is bounded by it and by the slower of the two internet
+connections — a LAN transfer is far faster and should be preferred when both
+machines are home. The pairing code *is* the key: anyone holding it can reach
+that library, which the UI says at the moment of sharing. Turning internet
+access off issues a new code and invalidates the old one.
 
 ---
 

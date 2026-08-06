@@ -1166,6 +1166,7 @@ async function loadConnections() {
 
   renderConnections(connections);
   renderDiscovered(discovered);
+  await loadTunnelStatus();
 
   $('connRemember').disabled = !keychain;
   $('connAddNote').textContent = keychain
@@ -1199,7 +1200,9 @@ function renderConnections(list) {
 
     row.querySelector('.row__title').textContent = connection.label;
     row.querySelector('.row__sub').textContent =
-      `${connection.base} as ${connection.username}`
+      (connection.via === 'relay'
+        ? `over the internet via ${connection.relay?.host} as ${connection.username}`
+        : `${connection.base} as ${connection.username}`)
       + (connection.hasSavedPassword ? '' : ' · password not saved');
 
     row.querySelector('[data-action="browse"]')
@@ -1250,6 +1253,85 @@ function renderDiscovered(hosts) {
   }
 }
 
+// --- being reachable over the internet --------------------------------------
+
+async function loadTunnelStatus() {
+  const status = await window.lanshare.tunnel.status();
+
+  $('relayHost').value = status.relayHost || $('relayHost').value;
+  $('relayPort').value = status.relayPort || 8460;
+
+  $('enableTunnelBtn').hidden = status.enabled;
+  $('disableTunnelBtn').hidden = !status.enabled;
+  $('showCodeBtn').hidden = !status.enabled;
+  $('relayHost').disabled = status.enabled;
+  $('relayPort').disabled = status.enabled;
+
+  // The code is never shown unasked — it is the key to this library, and a
+  // screen left open should not be one.
+  if (!status.enabled) $('pairingCodeBox').hidden = true;
+}
+
+$('enableTunnelBtn').addEventListener('click', async () => {
+  const errorEl = $('relayError');
+  errorEl.classList.remove('is-shown');
+
+  const button = $('enableTunnelBtn');
+  button.disabled = true;
+  try {
+    const result = await window.lanshare.tunnel.enable(
+      $('relayHost').value,
+      Number($('relayPort').value) || 8460,
+    );
+    if (!result.ok) {
+      errorEl.textContent = result.error;
+      errorEl.classList.add('is-shown');
+      return;
+    }
+    showPairingCode(result.code);
+    await loadTunnelStatus();
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('disableTunnelBtn').addEventListener('click', async () => {
+  const ok = confirm('Stop being reachable over the internet?\n\n'
+    + 'The current pairing code stops working. Machines already paired with it '
+    + 'will need a new one.');
+  if (!ok) return;
+  await window.lanshare.tunnel.disable();
+  await loadTunnelStatus();
+});
+
+$('showCodeBtn').addEventListener('click', async () => {
+  const result = await window.lanshare.tunnel.code();
+  if (!result.ok) { alert(result.error); return; }
+  showPairingCode(result.code);
+});
+
+function showPairingCode(code) {
+  $('pairingCode').textContent = code;
+  $('pairingCodeBox').hidden = false;
+}
+
+$('copyCodeBtn').addEventListener('click', () => {
+  window.lanshare.copyToClipboard($('pairingCode').textContent);
+  $('copyCodeBtn').textContent = 'Copied';
+  setTimeout(() => { $('copyCodeBtn').textContent = 'Copy'; }, 1500);
+});
+
+$('connMethod').addEventListener('change', () => {
+  const overInternet = $('connMethod').value === 'relay';
+  $('connAddressField').hidden = overInternet;
+  $('connCodeFields').hidden = !overInternet;
+  // A machine reached through a relay is usually reached through *your* relay.
+  if (overInternet && !$('connRelayHost').value) {
+    $('connRelayHost').value = $('relayHost').value;
+    $('connRelayPort').value = $('relayPort').value;
+  }
+});
+
 $('addConnBtn').addEventListener('click', async () => {
   const errorEl = $('connError');
   errorEl.classList.remove('is-shown');
@@ -1258,8 +1340,17 @@ $('addConnBtn').addEventListener('click', async () => {
   button.disabled = true;
   button.textContent = 'Connecting…';
 
+  const overInternet = $('connMethod').value === 'relay';
+
   try {
-    const result = await window.lanshare.connections.add({
+    const result = await window.lanshare.connections.add(overInternet ? {
+      code: $('connCode').value,
+      relayHost: $('connRelayHost').value,
+      relayPort: Number($('connRelayPort').value) || 8460,
+      username: $('connUsername').value,
+      password: $('connPassword').value,
+      remember: $('connRemember').checked,
+    } : {
       address: $('connAddress').value,
       username: $('connUsername').value,
       password: $('connPassword').value,
@@ -1272,10 +1363,12 @@ $('addConnBtn').addEventListener('click', async () => {
       return;
     }
 
-    // Never leave a password sitting in a field once it has been used.
+    // Never leave a password — or a pairing code, which is one — sitting in a
+    // field once it has been used.
     $('connPassword').value = '';
     $('connAddress').value = '';
     $('connUsername').value = '';
+    $('connCode').value = '';
     await loadConnections();
   } finally {
     button.disabled = false;
