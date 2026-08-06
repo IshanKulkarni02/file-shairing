@@ -171,6 +171,37 @@ try {
       res.body.equals(big), `${res.body.length} of ${big.length} bytes`);
   }
 
+  {
+    // A phone video is an ordinary thing to have in a photo library, and one
+    // does not fit in a single frame. Testing only with small files hid this
+    // completely — both directions failed outright at 25 MB.
+    const video = Buffer.alloc(9 * 1024 * 1024);
+    for (let i = 0; i < video.length; i += 4096) video[i] = (i / 4096) % 256;
+    writeFileSync(path.join(HOME, 'library', 'Private', 'clip.mp4'), video);
+
+    const down = await client.call('/api/file?path=%2FPrivate%2Fclip.mp4');
+    check('a file larger than one frame downloads over the tunnel',
+      down.body.equals(video), `${down.body.length} of ${video.length} bytes`);
+
+    const boundary = '----lanshare-test-boundary';
+    const head = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="sent.mp4"\r\n`
+      + 'Content-Type: application/octet-stream\r\n\r\n',
+    );
+    const body = Buffer.concat([head, video, Buffer.from(`\r\n--${boundary}--\r\n`)]);
+
+    const up = await client.call('/api/upload?dir=%2FPrivate&rel=sent.mp4', {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+    check('and one that size uploads too', up.status === 200, up.body.toString().slice(0, 80));
+
+    const back = await client.call('/api/file?path=%2FPrivate%2Fsent.mp4');
+    check('arriving byte for byte at the other end', back.body.equals(video),
+      `${back.body.length} of ${video.length} bytes`);
+  }
+
   // --- frames cannot be tampered with or replayed --------------------------
 
   {
