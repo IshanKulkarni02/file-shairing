@@ -157,6 +157,67 @@ check('zip has the PK signature', zipBytes.subarray(0, 2).toString() === 'PK');
 res = await req(zipJob.url);
 check('zip link is single-use', res.status === 404, `got ${res.status}`);
 
+// --- a zero-byte file ------------------------------------------------------
+// An empty file has no last byte, so the usual size - 1 is -1 and
+// createReadStream throws — uncaught, in a request handler, taking the whole
+// server down for everyone. Empty files are ordinary: a transfer that failed,
+// a card that misbehaved, a placeholder someone made.
+
+{
+  const album = `Empty-${Date.now().toString(36)}`;
+  await req('/api/mkdir', json({ path: '/', name: album }));
+
+  const form = new FormData();
+  form.append('file', new Blob([Buffer.alloc(0)]), 'nothing.txt');
+  res = await req(`/api/upload?dir=${encodeURIComponent(`/${album}`)}&rel=nothing.txt`, {
+    method: 'POST', body: form,
+  });
+  check('a zero-byte file uploads', res.status === 200, `got ${res.status}`);
+
+  res = await req(`/api/file?path=${encodeURIComponent(`/${album}/nothing.txt`)}`);
+  const body = await res.text();
+  check('and downloads as an empty body rather than crashing the server',
+    res.status === 200 && body === '', `got ${res.status}, ${body.length} bytes`);
+
+  res = await req('/api/me');
+  check('the server is still serving afterwards', res.status === 200, `got ${res.status}`);
+
+  await req('/api/delete', json({ paths: [`/${album}`] }));
+}
+
+// --- several uploads of one name, at once ---------------------------------
+// A phone sending a batch opens requests in parallel, and two photos sharing
+// a name is ordinary. Checking whether a name was free and then writing to it
+// lost all but one of them, and returned 500s while doing it.
+
+{
+  const album = `Race-${Date.now().toString(36)}`;
+  await req('/api/mkdir', json({ path: '/', name: album }));
+
+  const attempts = [1, 2, 3, 4, 5].map((i) => {
+    const form = new FormData();
+    form.append('file', new Blob([Buffer.from(`body ${i}`)]), 'same.txt');
+    return req(`/api/upload?dir=${encodeURIComponent(`/${album}`)}&rel=same.txt`, {
+      method: 'POST', body: form,
+    });
+  });
+  const codes = (await Promise.all(attempts)).map((r) => r.status);
+  check('five uploads of one name all succeed', codes.every((c) => c === 200), codes.join(','));
+
+  res = await req(`/api/list?path=${encodeURIComponent(`/${album}`)}`);
+  const listed = (await res.json()).files || [];
+  check('none of them is lost',
+    listed.length === 5, `${listed.length} files: ${listed.map((f) => f.name).join(', ')}`);
+
+  const bodies = await Promise.all(listed.map(async (file) => {
+    const r = await req(`/api/file?path=${encodeURIComponent(file.path)}`);
+    return r.text();
+  }));
+  check('and each keeps its own contents', new Set(bodies).size === 5, bodies.join(' | '));
+
+  await req('/api/delete', json({ paths: [`/${album}`] }));
+}
+
 // --- cleanup, then confirm the session can be dropped ---------------------
 
 await req('/api/delete', json({ paths: [savedPath, '/Trip'] }));
