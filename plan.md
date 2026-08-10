@@ -129,7 +129,9 @@ prove them. Current suites, all run against a live server:
 | `test/volume-parsers.mjs` | reading real recorded diskutil and lsblk output, so the macOS and Linux paths are covered from any machine |
 | `test/autostart.mjs` | start-on-login per platform, especially the Linux XDG entry Electron does not write |
 
-All 25 suites, 779 checks, pass together as of the deep audit.
+All 25 suites, 812 checks. Run them with `npm test` — it starts its own
+throwaway library and server and cleans up afterwards, so nothing needs
+starting by hand and a real library can never be touched.
 (`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
 the standard sweep — one needs the HTTPS listener, the other moves a
 gigabyte. `test/electron-links.js` needs an Electron runtime, for the reason
@@ -598,6 +600,36 @@ trash does not follow a link planted inside it.
 
 Both join the running tally of bugs living where two tested things meet, or
 where a realistic input meets code written around a tidy one.
+
+---
+
+## Third audit: exhaustion and a hostile peer (2026-08-06)
+
+The relay's far end is authenticated by the pairing code — but a code can
+leak, so the question is what someone holding one can do beyond reading the
+library they were given.
+
+**Held:** a peer streaming parts of a message that never completes does not
+grow memory without limit (heap 16 MB → 30 MB while pushing 80 MB) and the
+host keeps serving; a frame that fails authentication drops the connection
+rather than spinning; the relay caps rooms at 500 and stayed at exactly that
+after 520 attempts; a zip request naming 5,000 missing paths is handled; 300
+sign-ins in a row leave the server healthy; an absurdly deep path is refused
+rather than recursing.
+
+**Stated rather than fixed:** message reassembly is capped at 512 MB. That
+bounds memory but is generous, and it is the same headroom that lets a large
+video transfer at all. Someone with a leaked pairing code could make the far
+end allocate toward that ceiling. Lowering it would break large transfers;
+streaming instead of buffering whole files would fix both, and is a larger
+change than it looks.
+
+**Packaged build verified** at the same time, because Phases F and G had never
+run inside one — and the asar shim has already caused one bug (`fs.rmSync` on
+junctions). In the packaged app: all eight screens render, the OS keychain
+works, discovery runs, the tunnel reports status, and over its real HTTP API a
+vault is created, an encrypted upload decrypts back byte for byte, sharp
+renders a thumbnail and zip works — all from inside `app.asar`.
 
 ---
 

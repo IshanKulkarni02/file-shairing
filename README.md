@@ -1,20 +1,23 @@
 # LANShare
 
-Your photos and videos, on your own network.
+Your photos and videos, on your own machines.
 
-Run it on your laptop and every device in the house — iPhone, iPad, Mac,
-Android, another PC — signs in through a browser to view, upload, download and
-organise your library at full LAN speed. Nothing leaves your network and
-nothing touches a cloud account.
+Run it on a computer at home and every device in the house — iPhone, iPad,
+Mac, Android, another PC — signs in through a browser to view, upload,
+download and organise the library at full network speed. Some albums can be
+encrypted so that even someone holding the disk cannot read them. Albums can
+live on other drives. Drives can sync when you plug them in. Machines can
+reach each other's libraries, including over the internet.
+
+Nothing goes through anyone else's cloud unless you put it there.
 
 ---
 
 ## Quick start
 
-Double-click **`start.bat`**.
-
-On first run it installs what it needs and creates an account, printing the
-password once:
+**Windows:** run the installer from `dist-desktop/`, or double-click
+`start.bat` to run from source. On first launch an account is created and the
+password is printed once:
 
 ```
   First run - an account was created for you:
@@ -22,204 +25,220 @@ password once:
     password:  7cFJEKHyPb
 ```
 
-**Write that password down.** Then it shows where to connect:
+**Write that password down.** It is shown once and stored only as a hash.
+
+Then open the address it prints on any device on your network:
 
 ```
-  Open on this laptop:
-    http://localhost:8420
-
-  Open on your phone, tablet or another computer:
-    http://192.168.1.20:8420
-    http://msi.local:8420   (iPhone & Mac)
+  Open on this laptop:     http://localhost:8420
+  From another device:     http://192.168.1.20:8420
 ```
 
-A QR code appears underneath — point your phone's camera at it.
-
-Change the password any time:
-
-```bash
-npm run setup
-```
-
-## Opening it on your phone
-
-Any device on the same Wi-Fi can use the address above. On an iPhone or a Mac,
-prefer the `.local` address: it keeps working after your router hands the
-laptop a different IP.
-
-**Add it to your home screen** so it opens like a real app:
-
-- **iPhone / iPad** — open it in Safari, tap Share, then *Add to Home Screen*.
-- **Android / Chrome / Edge** — use the HTTPS address (below) and the browser
-  will offer *Install*.
-
-## The HTTPS address
-
-The server also listens on `https://<your-ip>:8443` with a certificate it
-generates for itself. You need this for the Install button on Android and
-desktop Chrome — browsers only allow app installation on a secure connection.
-
-Because the certificate is self-signed, each device has to be told to trust it
-once. Download it from `http://<your-ip>:8420/cert`.
-
-**On iPhone or iPad this is a two-step process, and the second step is the one
-everyone misses:**
-
-1. Open `http://<your-ip>:8420/cert` in Safari and allow the profile to
-   download. Then go to **Settings → General → VPN & Device Management** and
-   install it.
-2. Now go to **Settings → General → About → Certificate Trust Settings** and
-   switch it on for LANShare. Until you do this, Safari still refuses the
-   connection.
-
-On a Mac: open the downloaded `.crt`, find it in Keychain Access under
-*System*, and set it to *Always Trust*.
-
-Plain HTTP on port 8420 keeps working throughout and is slightly faster, since
-nothing has to be encrypted. On a home network that is a perfectly reasonable
-choice — the trade-off is that your password is sent in the clear over your own
-Wi-Fi, and Chrome will not offer to install the app.
-
-## If other devices cannot connect
-
-Windows Firewall blocks incoming connections to new programs by default. Run
-this once in an **Administrator** PowerShell:
-
-```powershell
-New-NetFirewallRule -DisplayName "LANShare" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8420,8443
-```
-
-Also check that the laptop and the phone are on the same network — a "guest"
-Wi-Fi network usually cannot see the main one.
+**macOS and Linux:** see [Other platforms](#other-platforms) — the code is
+there, but it has not been run on real hardware yet.
 
 ---
 
 ## What it does
 
-**Photos and videos first.** Files appear as a mosaic of tiles with real
-thumbnails, newest first, with folders as albums. Tap one for a full-screen
-viewer with swipe and arrow-key navigation.
+### The library
 
-**It handles iPhone media properly.** This is the part most home servers get
-wrong:
+Browse photos and videos by album, with thumbnails, full-screen viewing and
+video playback that scrubs properly on iPhone. Upload by dragging a folder in;
+the folder shape is kept. Select several files to move, rename, download as a
+zip, or send to the trash — which is a folder, not a void, so a mistake is
+recoverable.
 
-- **HEIC photos** are converted on the fly for browsers that cannot decode
-  them. Safari receives the original untouched.
-- **HEVC video** — what your iPhone actually records into `.mov` — plays
-  natively in Safari. For Chrome, Firefox and Android, the server transcodes to
-  H.264 as it streams, so the video simply plays instead of showing a black
-  rectangle.
-- **Rotation is respected**, so portrait photos are not sideways.
+HEIC photos and HEVC videos from an iPhone are converted on the fly for
+browsers that cannot display them, so nothing looks broken on a PC.
 
-**Uploads are streamed,** never buffered in memory, so file size is limited
-only by your disk. Three upload in parallel with live speed and time
-remaining. Drag a whole folder onto the window and its structure is preserved.
+### Accounts
 
-**Deletes are recoverable.** Anything you delete moves to
-`library/.lanshare/trash/`, not oblivion.
+Four cumulative roles: **viewer** (browse and download) → **contributor**
+(+upload) → **manager** (+rename, move, delete) → **admin** (+accounts and
+settings). Each account can be restricted to particular albums, so a guest can
+be given `/Family` and see nothing else — not the files, not the folder names,
+not even that anything else exists.
 
-**Downloads** stream with byte-range support, so video scrubbing works and
-interrupted transfers resume. Select several items to get them as a zip.
+Sessions are revocable. The Devices screen lists every signed-in device and
+revoking one takes effect on its very next request.
+
+### Encrypted albums (vaults)
+
+Mark an album as a vault and its contents are encrypted at rest with
+AES-256-GCM. Two kinds:
+
+- **Server-unlock** — you unlock it and the key lives in memory only, so
+  thumbnails, previews and video scrubbing all keep working. Protects a stolen
+  disk, a stolen backup, or a powered-off machine. Locks again on a timer.
+- **End-to-end** — your browser holds the key and the server only ever sees
+  ciphertext. The cost is stated up front rather than discovered later: no
+  thumbnails, no previews, no video playback. Downloads only.
+
+A vault can have several passphrases, so you can share access without sharing
+your own. Recovery codes are available, and the app says plainly at the moment
+of export that sharing a key **cannot be undone** — anyone holding it can
+decrypt forever.
+
+Files are encrypted in 1 MiB chunks, so byte-range requests still work and
+video still scrubs. Filenames, folder structure, sizes and timestamps are
+**not** encrypted — only contents. That is a deliberate, documented limit.
+
+### Storage across drives
+
+An album can be moved to an external disk, a second internal one, or a folder
+your cloud service syncs. It keeps working exactly as before on every device —
+its path does not change, because a link takes its place. Drives are tracked
+by volume id rather than drive letter, so a disk that comes back as `F:`
+instead of `E:` is recognised and repointed automatically.
+
+Unplug the drive and the album is still listed, marked as unreachable with the
+drive's name — not silently vanished.
+
+### Sync
+
+Keep an album mirrored to another drive, in both directions, on demand or
+automatically when that drive is plugged in.
+
+It compares three states — this side, that side, and what matched last time —
+because comparing only two cannot tell "added here" from "deleted there", and
+that is why naive sync resurrects every file you delete. Nothing is ever
+hard-deleted: removals go to a trash folder on the side being changed.
+Encrypted albums are copied as ciphertext and never decrypted to be moved,
+which is what makes a lost drive or a cloud copy safe.
+
+When both sides changed the same file, the default keeps both — the only
+policy that cannot lose work. "Newest wins" is available with its cost stated
+where you choose it, because two machines' clocks disagree more often than
+people expect.
+
+### Other machines
+
+The Machines screen finds other LANShare computers on your network and copies
+files either way. Passwords for them are kept in your operating system's
+keychain, never in a file.
+
+Each host's certificate is pinned the first time you pair, the way SSH pins
+host keys — there is no certificate authority on a home network, and simply
+disabling verification would be plain HTTP wearing a padlock.
+
+### Over the internet
+
+Both machines connect **out** to a small relay you run, so neither needs
+anything opened on its router. The relay pairs the two connections and copies
+bytes; it cannot read a password, a photo, a filename, or even which page was
+requested. See [`relay/README.md`](relay/README.md) for what it can and cannot
+see, and how to run one.
+
+If you would rather not run anything, Tailscale solves the same problem
+without this feature.
+
+---
+
+## Opening it on your phone
+
+Type the `http://192.168.x.x:8420` address into Safari or Chrome. Sign in
+once and it stays signed in for 30 days.
+
+To get an app icon rather than a browser tab, use the **HTTPS** address and
+choose *Add to Home Screen* (iPhone) or *Install app* (Chrome). Chrome and
+Edge only offer installation over HTTPS.
+
+### The HTTPS address
+
+LANShare generates its own certificate, which your browser has not been told
+to trust — so the first visit shows a warning. That is expected on a home
+network, where no certificate authority exists to vouch for your laptop.
+Accept it once per device, or install the certificate offered at
+`/cert` to stop the warning entirely.
+
+---
+
+## If other devices cannot connect
+
+Almost always the firewall. On Windows, allow Node.js (or LANShare) on
+**private** networks. Check the two machines are on the same network — a phone
+on mobile data, or a "guest" Wi-Fi network, cannot see your laptop.
 
 ---
 
 ## Where things live
 
-| Path | What it is |
+| What | Where |
 |---|---|
-| `library/` | Your photos and videos. Back this up. |
-| `library/.lanshare/thumbs/` | Thumbnail cache. Safe to delete; it rebuilds. |
-| `library/.lanshare/trash/` | Deleted items. Empty it yourself when ready. |
-| `library/.lanshare/tls/` | The HTTPS certificate. |
-| `config.json` | Password hash, session secret, port, library location. |
+| Photos and videos | `library/` (or wherever you moved it) |
+| Config and accounts | `config.json` |
+| Sessions | `.lanshare-server/sessions.json` |
+| Thumbnails | `library/.lanshare/cache/` |
+| Trash | `library/.lanshare/trash/` |
 
-`config.json` and `library/` are excluded from git, so no media, password
-hashes or session secrets can be committed.
-
-### Settings
-
-Edit `config.json` and restart:
-
-```json
-{
-  "port": 8420,
-  "httpsPort": 8443,
-  "library": "D:\\projects\\filesharing\\library",
-  "sessionDays": 30
-}
-```
-
-Point `library` at any folder — an existing photos folder works, and files are
-read and written in place. Set `httpsPort` to `0` to disable HTTPS entirely.
+Running the desktop app, these live in your user data directory rather than
+next to the program, because installation folders are often read-only and are
+not where anyone expects their photos to end up.
 
 ---
-
-## Building the .exe
-
-```bash
-npm run build
-```
-
-Produces `dist/LANShare.exe`: one file, no Node.js and no ffmpeg needed on the
-machine that runs it. Copy it anywhere and double-click.
-
-ffmpeg and sharp's image library are embedded and unpacked to
-`%LOCALAPPDATA%\LANShare\runtime\` the first time you run it — native code
-cannot execute from inside a packed executable, so it needs real files on disk.
-The first launch spends about a minute on that; after that it does not.
-
-`config.json` and `library/` are created **next to the .exe**, so the whole
-thing is portable: put `LANShare.exe` in a folder and that folder becomes your
-library.
-
-**It takes about 10 seconds to start.** The 370 MB of embedded binaries are
-Brotli-compressed to fit in a 170 MB file, and that has to be unpacked into
-memory on every launch. Since this is a server you start once and leave
-running, that seemed the better trade against a 440 MB uncompressed file.
-
-Build it on a machine that has ffmpeg on its PATH, otherwise the executable
-works but cannot make video thumbnails.
 
 ## Running from source
 
 ```bash
 npm install
-npm start
+npm start            # the server on its own
+npm run desktop      # the desktop app
+npm run build        # a single-file Windows .exe
+npm run build:desktop  # the installer
 ```
 
-Requires Node.js 18 or newer. ffmpeg is optional — without it, photos work
-fully and videos still play, but there are no video thumbnails and no HEVC
-conversion.
+Node 18 or newer. `npm run build:desktop` builds for the machine it runs on;
+pass `--mac` or `--linux` only on that platform, since neither
+cross-compiles usefully.
+
+---
 
 ## Tests
 
-Start the server, then in another terminal:
-
 ```bash
-node test/smoke.mjs <password>
+npm test              # every suite
+npm test -- --quick   # skip the slow ones
+npm test -- vault     # just the suites matching "vault"
 ```
 
-- `test/smoke.mjs` — auth, path traversal, range requests, upload round-trip,
-  album management, zip.
-- `test/media.mjs` — thumbnails, metadata, HEVC detection and live transcoding.
-  Run `npm run samples` first to generate the fixtures.
-- `test/pwa.mjs` — HTTPS, and every requirement a browser checks before it
-  offers to install the app.
-- `test/throughput.mjs` — a 1 GB round trip with an end-to-end checksum. This
-  is what would catch a regression of the upload timeout fix.
+It starts its own throwaway library and server and cleans up afterwards, so it
+never touches a real library and nothing needs starting by hand.
+
+Around 770 checks across 25 suites. They exist because clicking through a UI
+does not prove a security boundary: a viewer really is refused on every
+privileged route, a revoked session really does stop working, a tampered
+encrypted file really does fail authentication rather than returning wrong
+bytes, and a deletion really does stay deleted across later syncs.
+
+---
+
+## Other platforms
+
+macOS and Linux are written and packaged for — DMG, AppImage and `.deb` — but
+**have not been run on real hardware**. Read that as "ready to try", not
+"known working". The parts that could be tested from a Windows machine are:
+the `diskutil` and `lsblk` parsers are unit-tested against real recorded
+output, and the Linux autostart entry is tested, because Electron's own
+autostart API silently does nothing there.
+
+macOS builds are unsigned without an Apple Developer account, so Gatekeeper
+refuses them on first launch — right-click → Open, once. That is Apple policy,
+not something the code can work around.
 
 ---
 
 ## A note on security
 
-LANShare is built for a home network, and its defaults reflect that:
+This is built for a home network and for keeping your own photos private on
+your own hardware. The encryption uses standard constructions in standard
+ways, and the threat model is a stolen disk, a stolen backup, or a cloud copy
+you do not control.
 
-- Sign-in is required for everything, passwords are hashed with scrypt, and
-  repeated guesses are throttled.
-- Every path from a browser is validated, so nothing outside your library
-  folder can be read or written.
-- Sessions last 30 days so your phone stays signed in.
+It is **not** an audited product, and it is not a defence against someone who
+already has access to your unlocked machine.
 
-It is **not** built to face the open internet. Do not forward a port to it. If
-you want access from outside the house, use a VPN such as Tailscale or
-WireGuard and connect to it as though you were at home.
+Known limits, stated rather than buried: vault filenames and folder structure
+are not encrypted, only contents; sharing a vault key cannot be revoked
+without re-encrypting; and the first connection to a new machine trusts its
+certificate blindly, exactly as SSH does.
