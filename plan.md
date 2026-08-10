@@ -129,7 +129,7 @@ prove them. Current suites, all run against a live server:
 | `test/volume-parsers.mjs` | reading real recorded diskutil and lsblk output, so the macOS and Linux paths are covered from any machine |
 | `test/autostart.mjs` | start-on-login per platform, especially the Linux XDG entry Electron does not write |
 
-All 25 suites, 812 checks. Run them with `npm test` — it starts its own
+All 25 suites, 825 checks. Run them with `npm test` — it starts its own
 throwaway library and server and cleans up afterwards, so nothing needs
 starting by hand and a real library can never be touched.
 (`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
@@ -330,6 +330,12 @@ drive is genuinely replugged.
   Linux keeps `Photo.jpg` and `photo.jpg` apart; Windows and macOS do not, so
   syncing between them would have one silently overwrite the other with the
   survivor decided by iteration order. Phase E makes this a live path.
+- **A `pull` policy exists separately from `mirror`.** Mirror pushes the
+  library onto the target and deletes whatever the target holds that the
+  library does not — on a shared Google Drive or Dropbox folder that is
+  somewhere between rude and catastrophic. `pull` collects from the other side
+  and never writes to it, and never deletes on either side: a file that
+  vanished from the cloud is not an instruction to lose the copy you fetched.
 - **Previews are the same call as the run**, with `dryRun` set, so what is
   shown cannot drift from what happens. Deletions are listed first — burying
   them under a hundred copies is how someone approves one blind.
