@@ -639,6 +639,49 @@ renders a thumbnail and zip works — all from inside `app.asar`.
 
 ---
 
+## First-run setup (done)
+
+A fresh install used to generate a random admin password and print it once, on
+a screen someone could close before reading it. There is now a wizard that
+covers the app until it is finished: choose a username and a password of at
+least 8 characters, pick where the library lives, add the Windows firewall
+rule, and choose whether to start with Windows.
+
+**The firewall step is the one that earns its place.** Windows silently drops
+incoming connections; nothing errors, the phone just times out. It is the
+single most common reason a running LANShare cannot be seen from a phone. The
+rule is scoped to private networks only — never public — and is added by a
+button the user presses, so the UAC prompt is their own action rather than
+something appearing unbidden.
+
+The wizard replaces the generated account rather than adding beside it, so
+there is never a second admin with a password nobody knows, and revokes the
+sessions belonging to it.
+
+**Three executables were called some variant of LANShare.exe** — the
+installer, the unpacked app, and the portable console build — and only one
+installed anything. Running the wrong one launches the app and installs
+nothing, which reads exactly like a broken installer, and did. Now:
+`LANShare-Installer-<version>.exe`, `LANShare-Portable-NoInstall.exe`, and a
+build that prints which file to run.
+
+Two bugs found while building it, both the familiar seam:
+
+- `configLib.setUser` loads config from disk, changes that copy and saves it,
+  while the desktop process holds its own in-memory config. Calling both meant
+  the later save wrote back a stale object and **wiped the account that had
+  just been created**.
+- `desktop/main.js` overrode `LANSHARE_HOME` unconditionally, so a test
+  pointed at a throwaway directory silently ran against the real install and
+  rewrote its account. An explicitly set value now wins.
+
+Verified in the **installed** build, not just a dev run: the wizard appears on
+a fresh profile, all four steps render, completing it leaves exactly one admin
+account, the server starts, and the chosen password signs in over the real LAN
+address while a wrong one is refused.
+
+---
+
 ## Decisions and why
 
 Recorded so they are not relitigated or quietly reversed.
