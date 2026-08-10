@@ -129,7 +129,7 @@ prove them. Current suites, all run against a live server:
 | `test/volume-parsers.mjs` | reading real recorded diskutil and lsblk output, so the macOS and Linux paths are covered from any machine |
 | `test/autostart.mjs` | start-on-login per platform, especially the Linux XDG entry Electron does not write |
 
-All 25 suites, 798 checks, pass together as of the post-Phase-G audit.
+All 25 suites, 779 checks, pass together as of the deep audit.
 (`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
 the standard sweep — one needs the HTTPS listener, the other moves a
 gigabyte. `test/electron-links.js` needs an Electron runtime, for the reason
@@ -562,6 +562,42 @@ junctions and listings (C), the engine and its resolution layer (D), the
 frame size and a real file (G). Re-running a green suite has never once found
 one of these. The rule earned four times over: **when two tested things are
 joined, test the join, with realistic inputs.**
+
+---
+
+## Deep audit (2026-08-06)
+
+Attacking the boundaries rather than exercising the features. What held, and
+what did not.
+
+**Held, under direct attack:** a token with an edited payload, a stripped
+signature, or a signature from another secret is refused; a viewer cannot
+create accounts, change its own role, read the account list, register a drive,
+see the syncs, delete, upload or make an album; Windows device names
+(`CON`, `LPT1`), alternate data streams (`x.txt:hidden`), trailing dots and
+embedded NULs never reach the filesystem; a filename cannot inject a response
+header; a file copied from one vault into another does not decrypt there;
+swapping two albums' vault metadata does not expose either one's files; a
+baseline naming files that never existed deletes nothing; and emptying the
+trash does not follow a link planted inside it.
+
+**Did not hold:**
+
+- **A sync could be pointed at a folder inside itself, and grew without
+  bound.** Measured: 6 → 9 → 12 files over three runs, filling the disk. Fully
+  reachable, because a "drive" could be registered *inside the library* — or
+  as the library, or as a folder containing it — and sync-on-connect would
+  then do it repeatedly and unattended. Locations now refuse those three
+  shapes, and the engine independently refuses any pair where one folder is
+  inside the other, so a caller that has not learned the rule cannot
+  reintroduce it.
+- **A refused filename returned 500.** `CON.jpg`, a trailing dot, a name with
+  a separator — all correctly refused, all reported as a server fault. Clients
+  retry 5xx, so a folder containing one such file would be uploaded and
+  refused forever. Now 400, since it is the request that is wrong.
+
+Both join the running tally of bugs living where two tested things meet, or
+where a realistic input meets code written around a tidy one.
 
 ---
 

@@ -102,6 +102,34 @@ try {
     check('the file really arrives', read(s.target, 'a.jpg') === 'photo a');
   }
 
+  // --- a folder inside the other is a loop, not a sync --------------------
+  // Every run would copy the previous run's copy, and the library grows until
+  // the disk is full — unattended, because sync-on-connect keeps doing it.
+
+  {
+    const s = scratch();
+    put(s.source, 'a.jpg', 'photo a');
+
+    for (const [name, opts] of [
+      ['a folder synced to itself', { sourceDir: s.source, targetDir: s.source }],
+      ['a folder synced into its own subfolder', { sourceDir: s.source, targetDir: path.join(s.source, 'Inside') }],
+      ['a folder synced to its own parent', { sourceDir: path.join(s.source, 'Inner'), targetDir: s.source }],
+    ]) {
+      mkdirSync(path.join(s.source, 'Inner'), { recursive: true });
+      let error = null;
+      try {
+        await sync.run({ library: s.library, driveRoot: s.base, targetId: 'loop', ...opts });
+      } catch (err) {
+        error = err;
+      }
+      check(`${name} is refused`, error !== null, 'it ran instead');
+    }
+
+    check('and nothing was copied while finding that out',
+      readdirSync(s.source).filter((n) => n.endsWith('.jpg')).length === 1,
+      readdirSync(s.source).join(','));
+  }
+
   // --- an encrypted album keeps its key material with it ------------------
 
   {

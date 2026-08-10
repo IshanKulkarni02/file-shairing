@@ -196,6 +196,36 @@ try {
   check('repair reports the broken link rather than throwing',
     repair.broken.some((b) => b.name === 'Ghost'), JSON.stringify(repair));
 
+  // --- a "drive" inside the library is a loop waiting to happen ------------
+  // Sync a folder to somewhere inside itself and every run copies the last
+  // run's copy, until the disk is full. Refusing the location closes the only
+  // route someone can reach that through.
+
+  {
+    const loopBaseDir = tempDir('lanshare-looploc-');
+    const loopLibrary = path.join(loopBaseDir, 'library');
+    mkdirSync(path.join(loopLibrary, 'Album'), { recursive: true });
+
+    expectRejectSync('a folder inside the library cannot be a location',
+      () => locations.add({}, {
+        label: 'Inside', targetPath: path.join(loopLibrary, 'Album'), library: loopLibrary,
+      }), /inside your library/i);
+
+    expectRejectSync('nor the library itself',
+      () => locations.add({}, { label: 'Lib', targetPath: loopLibrary, library: loopLibrary }),
+      /inside your library/i);
+
+    expectRejectSync('nor a folder that contains the library',
+      () => locations.add({}, { label: 'Parent', targetPath: loopBaseDir, library: loopLibrary }),
+      /contains your library/i);
+
+    // A genuinely separate folder is still fine, which is the point.
+    const fine = path.join(loopBaseDir, 'elsewhere');
+    mkdirSync(fine);
+    const added = locations.add({}, { label: 'Elsewhere', targetPath: fine, library: loopLibrary });
+    check('while a folder outside it is accepted as normal', Boolean(added.id));
+  }
+
   // --- deleting an album that lives on another drive -----------------------
   // Trashing only the link would leave the real contents on that drive with
   // nothing pointing at them: not deleted, just invisible and permanent.

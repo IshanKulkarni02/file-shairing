@@ -428,7 +428,7 @@ ipcMain.handle('locations:list', () => locations.list(config).map((loc) => ({
 })));
 
 ipcMain.handle('locations:add', guarded((event, { label, path: target }) => {
-  const added = locations.add(config, { label, targetPath: target });
+  const added = locations.add(config, { label, targetPath: target, library: libraryPath() });
   configLib.save(config);
   return { location: added };
 }));
