@@ -107,7 +107,23 @@ function main() {
     process.exit(res.status || 1);
   }
 
-  console.log('\n  Done. See dist-desktop/ for the installer and the unpacked app.\n');
+  // Saying exactly which file to run, because dist-desktop also contains
+  // win-unpacked/LANShare.exe, which launches the app and installs nothing.
+  // Two executables with almost the same name and only one that installs is
+  // how someone ends up believing the installer is broken.
+  const built = fs.existsSync(path.join(ROOT, 'dist-desktop'))
+    ? fs.readdirSync(path.join(ROOT, 'dist-desktop')).filter((n) => /installer.*\.(exe|dmg|AppImage|deb)$/i.test(n))
+    : [];
+
+  console.log('\n  Done.\n');
+  if (built.length) {
+    console.log('  Install with:');
+    for (const name of built) console.log(`    dist-desktop/${name}`);
+    console.log('\n  dist-desktop/win-unpacked/ is the app itself — running it works,');
+    console.log('  but installs nothing and creates no shortcuts.\n');
+  } else {
+    console.log('  See dist-desktop/ for the output.\n');
+  }
 }
 
 main();

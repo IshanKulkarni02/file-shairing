@@ -8,6 +8,69 @@
 </head>
 <body>
 
+<div class="setup" id="setupOverlay" hidden>
+  <div class="setup__card">
+    <h1 style="margin:0 0 .2rem">Welcome to LANShare</h1>
+    <p class="panel__sub" style="margin:0 0 1.25rem">
+      Four quick things and your library is ready.
+    </p>
+
+    <div class="setup__step">
+      <h3>1 &nbsp;Your account</h3>
+      <p class="panel__sub" style="margin:0 0 .6rem">
+        This is what you will sign in with from your phone, and it is the only
+        thing standing in front of your whole library. Choose something you
+        will remember.
+      </p>
+      <div class="field">
+        <label class="field__label" for="setupUsername">Username</label>
+        <input class="field__input" id="setupUsername" autocomplete="off" autocapitalize="none">
+      </div>
+      <div class="field">
+        <label class="field__label" for="setupPassword">Password</label>
+        <input class="field__input" id="setupPassword" type="password" autocomplete="new-password">
+        <p class="field__hint">At least 8 characters.</p>
+      </div>
+      <div class="field">
+        <label class="field__label" for="setupPassword2">Repeat it</label>
+        <input class="field__input" id="setupPassword2" type="password" autocomplete="new-password">
+      </div>
+    </div>
+
+    <div class="setup__step">
+      <h3>2 &nbsp;Where your photos live</h3>
+      <p class="panel__sub" style="margin:0 0 .6rem">
+        Anything already here stays where it is. You can move it later.
+      </p>
+      <div class="field-row">
+        <input class="field__input" id="setupLibrary" readonly style="flex:1">
+        <button class="btn" id="setupBrowseBtn">Change…</button>
+      </div>
+    </div>
+
+    <div class="setup__step">
+      <h3>3 &nbsp;Let your other devices connect</h3>
+      <p class="panel__sub" style="margin:0 0 .6rem" id="setupFirewallNote"></p>
+      <button class="btn" id="setupFirewallBtn">Allow through the firewall</button>
+      <p class="field__error" id="setupFirewallError"></p>
+    </div>
+
+    <div class="setup__step">
+      <h3>4 &nbsp;Start with Windows</h3>
+      <label class="check-row">
+        <input type="checkbox" id="setupStartOnLogin"> Start LANShare when I sign in
+      </label>
+      <p class="panel__sub" style="margin:.35rem 0 0">
+        So your library is there when a phone looks for it, without you
+        remembering to open anything.
+      </p>
+    </div>
+
+    <p class="field__error" id="setupError"></p>
+    <button class="btn btn--primary btn--full" id="setupFinishBtn">Finish setup</button>
+  </div>
+</div>
+
 <nav class="nav">
   <div class="nav__brand">
     <img src="icon.png" alt="">

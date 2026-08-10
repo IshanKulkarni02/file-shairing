@@ -30,7 +30,14 @@ app.setName('LANShare');
 //
 // This MUST run before lib/config.js is required anywhere in this process:
 // it reads LANSHARE_HOME once, at module load time.
-process.env.LANSHARE_HOME = app.getPath('userData');
+//
+// An explicitly set LANSHARE_HOME wins, so the app can be pointed at a
+// throwaway directory. Overriding it unconditionally meant a test that
+// believed it was running against a scratch install was quietly running
+// against the real one — and rewrote its account.
+if (!process.env.LANSHARE_HOME) {
+  process.env.LANSHARE_HOME = app.getPath('userData');
+}
 
 const configLib = require('../lib/config');
 const serverApp = require('../lib/server-app');
@@ -47,6 +54,7 @@ const autostart = require('../lib/autostart');
 const connections = require('../lib/connections');
 const tunnel = require('../lib/tunnel');
 const paths = require('../lib/paths');
+const firewall = require('../lib/firewall');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -759,6 +767,91 @@ ipcMain.handle('dialog:pickLibraryFiles', async () => {
     names: result.filePaths.map((file) => path.basename(file)),
   };
 });
+
+// --- first run ---------------------------------------------------------------
+
+/**
+ * Whether the wizard should be shown.
+ *
+ * Keyed on an explicit flag rather than "does an account exist", because an
+ * account always exists — one is generated on first load so the server is
+ * never briefly open with no password at all. The flag is what distinguishes
+ * "a password was generated and nobody has seen it" from "a person chose one".
+ */
+ipcMain.handle('setup:status', () => ({
+  needed: config.setupComplete !== true,
+  defaultUsername: config.users?.[0]?.username || 'admin',
+  libraryPath: libraryPath(),
+  firewall: firewall.status({ execPath: process.execPath }),
+  ports: { http: config.port, https: config.httpsPort },
+  addresses: net.lanAddresses().map((a) => a.address),
+}));
+
+/** Add the Windows firewall rule. Raises a UAC prompt — the user pressed a button. */
+ipcMain.handle('setup:allowFirewall', guarded(() => {
+  const result = firewall.allow({
+    execPath: process.execPath,
+    ports: [config.port, config.httpsPort].filter(Boolean),
+  });
+  if (!result.ok) throw new accounts.AccountError(result.reason);
+  return { firewall: firewall.status({ execPath: process.execPath }) };
+}));
+
+ipcMain.handle('setup:complete', guarded(async (event, input) => {
+  const { username, password, libraryPath: newLibrary, startOnLogin } = input || {};
+
+  if (!username || !String(username).trim()) {
+    throw new accounts.AccountError('Choose a username');
+  }
+  if (!password || String(password).length < 8) {
+    // Longer than the 4 the account form allows, because this one is reachable
+    // from every device on the network and is the only thing in front of the
+    // whole library.
+    throw new accounts.AccountError('Choose a password of at least 8 characters');
+  }
+
+  // Moving the library has to happen before the account is written, or a
+  // failure would leave the password changed and the wizard still showing.
+  if (newLibrary && path.resolve(newLibrary) !== path.resolve(libraryPath())) {
+    await serialize(async () => {
+      const wasRunning = Boolean(serverHandle);
+      await stopServerImpl();
+      await library.moveLibrary(libraryPath(), newLibrary, 'move');
+      config.library = path.resolve(newLibrary);
+      configLib.save(config);
+      if (wasRunning) await startServerImpl();
+    });
+  }
+
+  // Replaces the generated account rather than adding beside it, so there is
+  // never a second admin with a password nobody knows.
+  //
+  // Written into the in-memory config rather than through configLib.setUser,
+  // which loads its own copy from disk, changes that, and saves it. Doing
+  // both means the later save() here writes back a stale object and wipes the
+  // account that was just created — which is exactly what happened.
+  const generatedName = config.users?.[0]?.username;
+  const chosen = String(username).trim();
+
+  config.users = [configLib.normalizeUser({
+    username: chosen,
+    role: 'admin',
+    roots: ['/'],
+    disabled: false,
+    ...configLib.hashPassword(String(password)),
+  })];
+
+  config.setupComplete = true;
+  config.startOnLogin = Boolean(startOnLogin);
+  configLib.save(config);
+  applyAutostart(config.startOnLogin);
+
+  // Every session from before setup belonged to the generated account.
+  sessions.revokeAllForUser(generatedName || 'admin');
+
+  notifyRenderer();
+  return { username: String(username).trim() };
+}));
 
 // --- settings --------------------------------------------------------------
 

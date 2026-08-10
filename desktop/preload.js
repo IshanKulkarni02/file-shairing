@@ -85,6 +85,12 @@ contextBridge.exposeInMainWorld('lanshare', {
     },
   },
 
+  setup: {
+    status: () => invoke('setup:status'),
+    allowFirewall: () => invoke('setup:allowFirewall'),
+    complete: (input) => invoke('setup:complete', input),
+  },
+
   tunnel: {
     status: () => invoke('tunnel:status'),
     enable: (relayHost, relayPort) => invoke('tunnel:enable', { relayHost, relayPort }),
