@@ -601,6 +601,36 @@ where a realistic input meets code written around a tidy one.
 
 ---
 
+## Third audit: exhaustion and a hostile peer (2026-08-06)
+
+The relay's far end is authenticated by the pairing code — but a code can
+leak, so the question is what someone holding one can do beyond reading the
+library they were given.
+
+**Held:** a peer streaming parts of a message that never completes does not
+grow memory without limit (heap 16 MB → 30 MB while pushing 80 MB) and the
+host keeps serving; a frame that fails authentication drops the connection
+rather than spinning; the relay caps rooms at 500 and stayed at exactly that
+after 520 attempts; a zip request naming 5,000 missing paths is handled; 300
+sign-ins in a row leave the server healthy; an absurdly deep path is refused
+rather than recursing.
+
+**Stated rather than fixed:** message reassembly is capped at 512 MB. That
+bounds memory but is generous, and it is the same headroom that lets a large
+video transfer at all. Someone with a leaked pairing code could make the far
+end allocate toward that ceiling. Lowering it would break large transfers;
+streaming instead of buffering whole files would fix both, and is a larger
+change than it looks.
+
+**Packaged build verified** at the same time, because Phases F and G had never
+run inside one — and the asar shim has already caused one bug (`fs.rmSync` on
+junctions). In the packaged app: all eight screens render, the OS keychain
+works, discovery runs, the tunnel reports status, and over its real HTTP API a
+vault is created, an encrypted upload decrypts back byte for byte, sharp
+renders a thumbnail and zip works — all from inside `app.asar`.
+
+---
+
 ## Decisions and why
 
 Recorded so they are not relitigated or quietly reversed.
