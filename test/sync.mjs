@@ -291,6 +291,37 @@ try {
       report.planned.toSource === 0 && report.planned.deleteOnSource === 0, JSON.stringify(report.planned));
   }
 
+  // --- pulling from a cloud folder ----------------------------------------
+  // The Google Drive case: collect what is there, and never touch it.
+
+  {
+    const s = scratch();
+    put(s.source, 'already-mine.jpg', 'mine');
+    put(s.target, 'from-cloud.jpg', 'downloaded');
+    put(s.target, 'Shared/other.jpg', 'also downloaded');
+
+    const report = await sync.run(runOpts(s, { policy: 'pull' }));
+
+    check('a pull brings the cloud folder\'s files into the library',
+      read(s.source, 'from-cloud.jpg') === 'downloaded');
+    check('including ones in subfolders',
+      read(s.source, 'Shared/other.jpg') === 'also downloaded');
+    check('and never writes to the cloud folder',
+      !has(s.target, 'already-mine.jpg'), 'the library was pushed to the cloud folder');
+    check('nor deletes anything there',
+      report.planned.deleteOnTarget === 0 && has(s.target, 'from-cloud.jpg'),
+      JSON.stringify(report.planned));
+    check('nor deletes anything here',
+      report.planned.deleteOnSource === 0 && has(s.source, 'already-mine.jpg'));
+
+    // A file removed from the cloud must not remove the copy you fetched.
+    rmSync(path.join(s.target, 'from-cloud.jpg'));
+    const after = await sync.run(runOpts(s, { policy: 'pull' }));
+    check('a file later removed from the cloud keeps the copy already pulled',
+      has(s.source, 'from-cloud.jpg') && after.planned.total === 0,
+      JSON.stringify(after.planned));
+  }
+
   // --- a dry run changes nothing ------------------------------------------
 
   {

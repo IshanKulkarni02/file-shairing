@@ -836,6 +836,9 @@ const POLICY_NOTES = {
     + 'two machines’ clocks disagree it can keep the wrong one.',
   mirror: 'The drive is made to match the library exactly, including removing anything the '
     + 'library does not have. Changes made on the drive never come back.',
+  pull: 'Files are copied from the drive into your library and the drive is never written '
+    + 'to or deleted from. The right choice for a Google Drive or Dropbox folder you want '
+    + 'to collect from rather than manage.',
 };
 
 $('syncPolicy').addEventListener('change', () => {

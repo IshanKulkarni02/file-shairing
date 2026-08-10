@@ -207,6 +207,53 @@ function actionFor(plan, rel) {
     actionFor(plan, 'old.jpg')?.type === 'delete');
 }
 
+// --- pull: collect from the other side, touch nothing over there ---------
+// For a Google Drive or Dropbox folder you want to fetch from rather than
+// manage. Mirror would push your library onto it and delete what it holds
+// that you do not — somewhere between rude and catastrophic on a shared
+// folder — so this is the direction that has to exist separately.
+
+{
+  const source = listing({ 'mine.jpg': file(10, T) });
+  const target = listing({ 'theirs.jpg': file(20, T), 'mine.jpg': file(10, T) });
+  const plan = sync.buildPlan({ source, target, baseline: null, policy: 'pull' });
+
+  check('a pull fetches what only the other side has',
+    actionFor(plan, 'theirs.jpg')?.direction === 'to-source', JSON.stringify(plan.actions));
+  check('and leaves matching files alone', !actionFor(plan, 'mine.jpg'));
+  check('a pull never writes to the other side',
+    !plan.actions.some((a) => a.direction === 'to-target' || a.side === 'target'),
+    JSON.stringify(plan.actions));
+  check('and never deletes anything anywhere',
+    !plan.actions.some((a) => a.type === 'delete'), JSON.stringify(plan.actions));
+}
+
+{
+  // A file gone from the cloud is not an instruction to lose your copy.
+  const plan = sync.buildPlan({
+    source: listing({ 'kept.jpg': file(10, T) }),
+    target: listing({}),
+    baseline: listing({ 'kept.jpg': file(10, T) }),
+    policy: 'pull',
+  });
+  check('a file removed from the other side is kept, not deleted here',
+    plan.actions.length === 0, JSON.stringify(plan.actions));
+}
+
+{
+  // An edit over there wins, because that is what fetching means.
+  const plan = sync.buildPlan({
+    source: listing({ 'photo.jpg': file(10, T) }),
+    target: listing({ 'photo.jpg': file(99, T + 60_000) }),
+    baseline: listing({ 'photo.jpg': file(10, T) }),
+    policy: 'pull',
+  });
+  const action = actionFor(plan, 'photo.jpg');
+  check('a file changed on the other side is fetched again',
+    action?.direction === 'to-source', JSON.stringify(action));
+  check('and a pull reports no conflicts to resolve', plan.summary.conflicts === 0);
+}
+
 // --- timestamp tolerance -------------------------------------------------
 
 {
