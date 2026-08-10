@@ -159,7 +159,9 @@ try {
     } else {
       const argv = suite.kind === 'server'
         ? [file, PASSWORD, `http://127.0.0.1:${HTTP_PORT}`]
-        : suite.kind === 'https' ? [file, PASSWORD, '127.0.0.1'] : [file];
+        : suite.kind === 'https'
+          ? [file, PASSWORD, '127.0.0.1', String(HTTP_PORT), String(HTTPS_PORT)]
+          : [file];
       result = await run(process.execPath, argv, { env: { LANSHARE_HOME: HOME } });
     }
 

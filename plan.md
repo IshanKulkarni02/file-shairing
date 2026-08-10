@@ -129,7 +129,9 @@ prove them. Current suites, all run against a live server:
 | `test/volume-parsers.mjs` | reading real recorded diskutil and lsblk output, so the macOS and Linux paths are covered from any machine |
 | `test/autostart.mjs` | start-on-login per platform, especially the Linux XDG entry Electron does not write |
 
-All 25 suites, 779 checks, pass together as of the deep audit.
+All 25 suites, 812 checks. Run them with `npm test` — it starts its own
+throwaway library and server and cleans up afterwards, so nothing needs
+starting by hand and a real library can never be touched.
 (`test/pwa.mjs` and `test/throughput.mjs` are run on demand rather than in
 the standard sweep — one needs the HTTPS listener, the other moves a
 gigabyte. `test/electron-links.js` needs an Electron runtime, for the reason

@@ -2,7 +2,7 @@
  * Checks the HTTPS listener and the assets a browser needs before it will
  * offer to install the app.
  *
- *   node test/pwa.mjs <password> [host]
+ *   node test/pwa.mjs <password> [host] [httpPort] [httpsPort]
  */
 
 // The certificate is self-signed on purpose. Accept it for this test process
@@ -12,11 +12,17 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const PASSWORD = process.argv[2];
 const HOST = process.argv[3] || '127.0.0.1';
-const HTTPS_BASE = `https://${HOST}:8443`;
-const HTTP_BASE = `http://${HOST}:8420`;
+// Ports are arguments rather than constants, so this can run against a server
+// on whatever ports the caller chose. Hardcoding them made this the one suite
+// the test runner could not run, since it starts a server of its own well
+// away from the defaults.
+const HTTP_PORT = Number(process.argv[4]) || 8420;
+const HTTPS_PORT = Number(process.argv[5]) || 8443;
+const HTTPS_BASE = `https://${HOST}:${HTTPS_PORT}`;
+const HTTP_BASE = `http://${HOST}:${HTTP_PORT}`;
 
 if (!PASSWORD) {
-  console.error('Usage: node test/pwa.mjs <password> [host]');
+  console.error('Usage: node test/pwa.mjs <password> [host] [httpPort] [httpsPort]');
   process.exit(2);
 }
 
