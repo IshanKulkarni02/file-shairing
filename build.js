@@ -1,7 +1,9 @@
 'use strict';
 
 /**
- * Build dist/LANShare.exe — a single self-contained Windows executable.
+ * Build dist/LANShare-Portable-NoInstall.exe — a single self-contained Windows
+ * executable that runs the server directly. It installs nothing; the installer
+ * is built by desktop-build.js.
  *
  *   node build.js
  *
@@ -47,7 +49,9 @@ function stageSharp() {
 
 function runPkg() {
   fs.mkdirSync(DIST, { recursive: true });
-  const output = path.join(DIST, 'LANShare.exe');
+  // Named so it cannot be mistaken for the installer. Three executables all
+  // called LANShare.exe, only one of which installs anything, is a trap.
+  const output = path.join(DIST, 'LANShare-Portable-NoInstall.exe');
 
   const args = [
     '@yao-pkg/pkg',

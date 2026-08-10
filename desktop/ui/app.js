@@ -1544,3 +1544,128 @@ window.lanshare.sync.onChanged(({ running }) => {
     : '';
   loadSync();
 });
+
+// ---------------------------------------------------------------------------
+// First-run setup
+// ---------------------------------------------------------------------------
+
+/**
+ * Shown before anything else on a fresh install.
+ *
+ * Until this is finished there is an admin password that was generated rather
+ * than chosen, so the rest of the app would be misleading to touch — hence a
+ * cover rather than a panel, and no way to dismiss it without finishing.
+ */
+async function loadSetup() {
+  const state = await window.lanshare.setup.status();
+  if (!state.needed) {
+    $('setupOverlay').hidden = true;
+    return;
+  }
+
+  $('setupOverlay').hidden = false;
+  $('setupUsername').value = state.defaultUsername || 'admin';
+  $('setupLibrary').value = state.libraryPath;
+  renderFirewallStep(state);
+  $('setupUsername').focus();
+}
+
+function renderFirewallStep(state) {
+  const note = $('setupFirewallNote');
+  const button = $('setupFirewallBtn');
+
+  if (!state.firewall?.supported) {
+    note.textContent = 'Nothing to do on this system — it does not block incoming '
+      + 'connections on your own network by default.';
+    button.hidden = true;
+    return;
+  }
+
+  if (state.firewall.present) {
+    note.textContent = 'Allowed. Other devices on your network can reach LANShare.';
+    button.hidden = true;
+    return;
+  }
+
+  note.textContent = 'Windows blocks incoming connections by default, which is the usual '
+    + 'reason a phone cannot find LANShare even though it is running. This adds a rule for '
+    + 'private networks only — never public ones — and Windows will ask you to confirm.';
+  button.hidden = false;
+}
+
+$('setupBrowseBtn').addEventListener('click', async () => {
+  const picked = await window.lanshare.pickFolder();
+  if (picked) $('setupLibrary').value = picked;
+});
+
+$('setupFirewallBtn').addEventListener('click', async () => {
+  const errorEl = $('setupFirewallError');
+  errorEl.classList.remove('is-shown');
+
+  const button = $('setupFirewallBtn');
+  button.disabled = true;
+  button.textContent = 'Waiting for Windows…';
+  try {
+    const result = await window.lanshare.setup.allowFirewall();
+    if (!result.ok) {
+      errorEl.textContent = result.error;
+      errorEl.classList.add('is-shown');
+      return;
+    }
+    renderFirewallStep(await window.lanshare.setup.status());
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Allow through the firewall';
+  }
+});
+
+$('setupFinishBtn').addEventListener('click', async () => {
+  const errorEl = $('setupError');
+  errorEl.classList.remove('is-shown');
+
+  const username = $('setupUsername').value.trim();
+  const password = $('setupPassword').value;
+
+  // Checked here as well as in the main process: this is the one password
+  // that is reachable from every device on the network.
+  if (!username) return showSetupError('Choose a username.');
+  if (password.length < 8) return showSetupError('Use a password of at least 8 characters.');
+  if (password !== $('setupPassword2').value) return showSetupError('The two passwords do not match.');
+
+  const button = $('setupFinishBtn');
+  button.disabled = true;
+  button.textContent = 'Setting up…';
+
+  try {
+    const result = await window.lanshare.setup.complete({
+      username,
+      password,
+      libraryPath: $('setupLibrary').value,
+      startOnLogin: $('setupStartOnLogin').checked,
+    });
+
+    if (!result.ok) return showSetupError(result.error);
+
+    // Never leave the password sitting in a field.
+    $('setupPassword').value = '';
+    $('setupPassword2').value = '';
+    $('setupOverlay').hidden = true;
+    $('firstRunCard').hidden = true;
+    await refresh();
+  } catch (err) {
+    showSetupError(`Setup could not finish: ${err.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Finish setup';
+  }
+  return undefined;
+});
+
+function showSetupError(message) {
+  const errorEl = $('setupError');
+  errorEl.textContent = message;
+  errorEl.classList.add('is-shown');
+  return undefined;
+}
+
+loadSetup();

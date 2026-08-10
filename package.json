@@ -61,6 +61,7 @@
       ]
     },
     "nsis": {
+      "artifactName": "LANShare-Installer-${version}.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
