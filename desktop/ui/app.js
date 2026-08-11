@@ -1628,9 +1628,11 @@ $('setupFinishBtn').addEventListener('click', async () => {
 
   // Checked here as well as in the main process: this is the one password
   // that is reachable from every device on the network.
-  if (!username) return showSetupError('Choose a username.');
-  if (password.length < 8) return showSetupError('Use a password of at least 8 characters.');
-  if (password !== $('setupPassword2').value) return showSetupError('The two passwords do not match.');
+  if (!username) return showSetupError('Choose a username.', 'setupUsername');
+  if (password.length < 8) return showSetupError('Use a password of at least 8 characters.', 'setupPassword');
+  if (password !== $('setupPassword2').value) {
+    return showSetupError('The two passwords do not match.', 'setupPassword2');
+  }
 
   const button = $('setupFinishBtn');
   button.disabled = true;
@@ -1661,10 +1663,24 @@ $('setupFinishBtn').addEventListener('click', async () => {
   return undefined;
 });
 
-function showSetupError(message) {
+/**
+ * Show why the button did nothing.
+ *
+ * The message alone is not enough: it once rendered below the fold, so a
+ * rejected password looked exactly like a dead button. Now the field at fault
+ * is scrolled to and focused, so the reason is always somewhere the eye is
+ * already going.
+ */
+function showSetupError(message, fieldId = null) {
   const errorEl = $('setupError');
   errorEl.textContent = message;
   errorEl.classList.add('is-shown');
+
+  const field = fieldId && $(fieldId);
+  if (field) {
+    field.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    field.focus();
+  }
   return undefined;
 }
 
