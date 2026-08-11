@@ -11,10 +11,11 @@
 <div class="setup" id="setupOverlay" hidden>
   <div class="setup__card">
     <h1 style="margin:0 0 .2rem">Welcome to LANShare</h1>
-    <p class="panel__sub" style="margin:0 0 1.25rem">
+    <p class="panel__sub" style="margin:0 0 1rem">
       Four quick things and your library is ready.
     </p>
 
+    <div class="setup__steps">
     <div class="setup__step">
       <h3>1 &nbsp;Your account</h3>
       <p class="panel__sub" style="margin:0 0 .6rem">
@@ -66,8 +67,12 @@
       </p>
     </div>
 
-    <p class="field__error" id="setupError"></p>
-    <button class="btn btn--primary btn--full" id="setupFinishBtn">Finish setup</button>
+    </div>
+
+    <div class="setup__footer">
+      <p class="field__error" id="setupError"></p>
+      <button class="btn btn--primary btn--full" id="setupFinishBtn">Finish setup</button>
+    </div>
   </div>
 </div>
 

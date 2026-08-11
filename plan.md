@@ -675,6 +675,23 @@ Two bugs found while building it, both the familiar seam:
   pointed at a throwaway directory silently ran against the real install and
   rewrote its account. An explicitly set value now wins.
 
+**The wizard shipped unusable, and only a person could have found it.** The
+card was 873px tall in a 683px window, so "Finish setup" sat 158px below the
+fold with nothing indicating there was more to scroll to. Every automated
+check passed, because they all clicked the button through the DOM — which
+works perfectly on a button nobody can see. The cause was `max-height: 100%`
+on a card inside a content-sized grid row, where 100% resolves against the
+content and constrains nothing. Now a flex column capped at
+`calc(100vh - 2.5rem)`, with the steps scrolling and the action pinned below
+them; measured with the viewport overridden at 380x500, 420x560, 466x683 and
+900x1000, the button and the first field are on screen at every one.
+
+**The lesson, and it is not a small one:** driving a UI through the DOM proves
+the wiring, never the layout. `element.click()` does not care whether the
+element is visible, reachable, or covered. Anything that is meant to be *seen*
+needs its geometry asserted — is it inside the viewport — or a person needs to
+look at it.
+
 Verified in the **installed** build, not just a dev run: the wizard appears on
 a fresh profile, all four steps render, completing it leaves exactly one admin
 account, the server starts, and the chosen password signs in over the real LAN
