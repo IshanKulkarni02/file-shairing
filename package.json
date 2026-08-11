@@ -1,6 +1,6 @@
 {
   "name": "lanshare",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Password-protected LAN photo & video library. Browse, preview, upload and download from any device on your network.",
   "main": "desktop/main.js",
   "scripts": {
@@ -8,6 +8,7 @@
     "setup": "node setup.js",
     "icons": "node tools/make-icons.js",
     "test": "node test/run-all.mjs",
+    "release": "node tools/release.js",
     "samples": "node test/make-samples.mjs",
     "build": "node build.js",
     "desktop": "electron desktop/main.js",
@@ -67,7 +68,10 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "LANShare"
+      "shortcutName": "LANShare",
+      "deleteAppDataOnUninstall": false,
+      "menuCategory": false,
+      "include": "build/installer.nsh"
     },
     "mac": {
       "target": [

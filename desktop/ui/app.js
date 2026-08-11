@@ -122,6 +122,7 @@ function render(status) {
   if (status.qrDataUrl) $('qrImg').src = status.qrDataUrl;
 
   $('libraryPath').textContent = status.library;
+  if (status.version) $('navVersion').textContent = `v${status.version}`;
 }
 
 async function refresh() {
