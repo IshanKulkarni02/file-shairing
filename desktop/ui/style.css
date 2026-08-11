@@ -433,3 +433,18 @@ button { font: inherit; color: inherit; cursor: pointer; border: none; backgroun
   font-size: .9rem;
   margin: 0 0 .35rem;
 }
+
+/* The version, small and out of the way, but readable. Its whole job is to
+   let someone answer "am I running the new one?" without opening anything. */
+.nav__version {
+  /* Tucked under the status line rather than added as another block: the rail
+     is exactly window-height, so anything that grows its content pushes the
+     last thing in it off the bottom edge. */
+  flex: none;
+  padding: 0 .9rem .55rem;
+  margin-top: -.15rem;
+  font-size: .6875rem;
+  font-weight: 600;
+  color: var(--text-soft);
+  opacity: .8;
+}

@@ -176,6 +176,15 @@ async function currentStatus() {
     // Only non-null on the very first run ever — the caller should show it
     // once and never be able to fetch it again after this process exits.
     generatedPassword: generated,
+    // Shown in the window. Every build being 1.0.0 is how an old install got
+    // mistaken for a broken new one; a version you can read makes "did it
+    // actually update" a question anyone can answer for themselves.
+    //
+    // Read from package.json rather than app.getVersion(), which returns the
+    // app's version only when packaged and Electron's own — 43.2.0 — when run
+    // from source. A version field that is right in one build and wrong in
+    // the other is worse than none, since it is trusted either way.
+    version: require('../package.json').version,
   };
 }
 
