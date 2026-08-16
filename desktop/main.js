@@ -83,7 +83,7 @@ function serialize(fn) {
 
 async function startServerImpl() {
   if (serverHandle) return serverHandle;
-  serverHandle = await serverApp.start(config);
+  serverHandle = await serverApp.start(config, { secrets: secretStore() });
 
   // A sync the watcher starts on its own has to show up on the Sync screen,
   // or the app looks idle while it is busy copying gigabytes.

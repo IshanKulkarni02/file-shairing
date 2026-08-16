@@ -170,10 +170,20 @@ function buildTile(file, index, { searchMode = false } = {}) {
   tile.dataset.path = file.path;
   tile.style.animationDelay = `${Math.min(index, 12) * 40}ms`;
 
+  // The location whose name/path/etc. this file object actually describes.
+  // "Remote-only" means the best copy search knows of is not on this server
+  // at all — nothing here can thumbnail, preview or download it, only say
+  // where it actually lives.
+  const primary = searchMode ? primaryLocation(file) : null;
+  const isRemoteOnly = Boolean(primary && primary.source !== 'local');
+  const otherLocations = searchMode && file.locations ? file.locations.length - 1 : 0;
+
   // An end-to-end vault's contents are ciphertext to the server, so there is
   // no thumbnail to ask for — requesting one would only produce a guaranteed
-  // 409 per tile. Show the generic icon straight away instead.
-  const hasThumb = (file.kind === 'image' || file.kind === 'video') && !file.e2e;
+  // 409 per tile. A remote-only result is the same story for a different
+  // reason: this server was never sent the bytes to make one from. Show the
+  // generic icon straight away in both cases.
+  const hasThumb = (file.kind === 'image' || file.kind === 'video') && !file.e2e && !isRemoteOnly;
 
   if (hasThumb) {
     const img = document.createElement('img');
@@ -228,26 +238,59 @@ function buildTile(file, index, { searchMode = false } = {}) {
   // A search result found inside a vault: the route already never returns
   // one from a locked vault, so anything encrypted here is either an
   // unlocked one or an end-to-end album. Either way, flag it rather than
-  // pretend it is an ordinary file.
-  if (searchMode && file.encrypted) {
+  // pretend it is an ordinary file. A remote-only result gets the same
+  // corner instead, since only one of the two things this app cannot show
+  // inline is ever true for a given tile at a time.
+  if (searchMode && isRemoteOnly) {
+    const away = document.createElement('div');
+    away.className = 'tile__lock';
+    away.title = primary.reachable
+      ? `On ${primary.label} — not this machine`
+      : `On ${primary.label} — unreachable right now`;
+    away.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><use href="#i-drive"/></svg>';
+    tile.append(away);
+  } else if (searchMode && file.encrypted) {
     const lock = document.createElement('div');
     lock.className = 'tile__lock';
     lock.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><use href="#i-lock"/></svg>';
     tile.append(lock);
   }
 
-  const check = document.createElement('button');
-  check.className = 'tile__check';
-  check.setAttribute('aria-label', `Select ${file.name}`);
-  check.innerHTML = '<svg class="icon" viewBox="0 0 24 24" style="width:1rem;height:1rem"><use href="#i-check"/></svg>';
-  check.addEventListener('click', (event) => {
-    event.stopPropagation();
-    toggleSelect(file.path);
-  });
-  tile.append(check);
+  // However many other machines also hold this exact file — worth knowing
+  // before you delete what looks like the only copy.
+  if (otherLocations > 0) {
+    const count = document.createElement('div');
+    count.className = 'tile__locations';
+    const others = file.locations.filter((l) => l !== primary).map((l) => l.label);
+    count.title = `Also on ${others.join(', ')}`;
+    count.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><use href="#i-drive"/></svg><span>${otherLocations + 1}</span>`;
+    tile.append(count);
+  }
+
+  // Download, delete, move and rename all assume a path this server can
+  // actually resolve — a remote-only result has no such path here, so it
+  // is never made selectable for them in the first place, rather than
+  // letting a bulk action fail confusingly on whichever items it reached.
+  if (!isRemoteOnly) {
+    const check = document.createElement('button');
+    check.className = 'tile__check';
+    check.setAttribute('aria-label', `Select ${file.name}`);
+    check.innerHTML = '<svg class="icon" viewBox="0 0 24 24" style="width:1rem;height:1rem"><use href="#i-check"/></svg>';
+    check.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleSelect(file.path);
+    });
+    tile.append(check);
+  }
 
   tile.addEventListener('click', () => {
     if (state.selected.size) { toggleSelect(file.path); return; }
+    if (searchMode && isRemoteOnly) {
+      toast(primary.reachable
+        ? `${file.name} is on ${primary.label}, not this machine — this screen can only show you where it is.`
+        : `${file.name} is on ${primary.label}, last reachable ${new Date(primary.cachedAt).toLocaleString()}.`);
+      return;
+    }
     if (searchMode && file.encrypted) {
       // The route already never returns a path from a locked vault, but
       // whether the server can actually decrypt it for a preview (a
@@ -519,7 +562,17 @@ function searchResultToFile(row) {
     mtime: row.mtime,
     encrypted: row.encrypted,
     v: Math.round(row.mtime || 0),
+    // Present only when this account can see federated results at all
+    // (search-routes.mjs's non-admin case omits it entirely, same as a
+    // plain, unfederated /api/list file never having one) — always treated
+    // as "just this one place" when absent, never as "nothing is known".
+    locations: row.locations || null,
   };
+}
+
+/** Whichever location the top-level name/path/etc. above actually describe. */
+function primaryLocation(file) {
+  return file.locations?.find((l) => l.primary) || file.locations?.[0] || null;
 }
 
 async function runSearch(text) {

@@ -25,7 +25,7 @@ the internet without port forwarding.
 | F | Client mode — connect to other hosts | **Done** |
 | G | P2P over the internet | **Done** (relay; hole punching not attempted) |
 | H | Metadata and search — the foundation | **Done** |
-| I | Search across every machine | Not started |
+| I | Search across every machine | **Done** (see note below — one gap left open on purpose) |
 | J | A central index every device can reach | Not started |
 | K | Import on connect — cameras, drones, cards | Not started |
 | L | Sorting rules, versioned in git | Not started |
@@ -885,6 +885,46 @@ built — LAN if it is there, relay if it is not.
 exists in three places, it can warn before you delete the last copy. A single
 view of everything makes deleting the only remaining copy much easier to do by
 accident.
+
+**Built:** `lib/federation.js` — a search asks every connection in
+`config.connections` (the same list the desktop Connections screen already
+manages; nothing new is paired) for its own `/api/search`, in parallel, each
+bounded by its own short timeout so one slow or dead machine never holds up
+the rest. Results merge with the local ones by content hash into one entry
+per file naming every machine that holds it — `{source, label, path,
+reachable, cachedAt}` per location, `primary` marking which one the result's
+top-level fields actually describe. `GET /api/search` carries this for every
+account, but **only ever contacts another machine for a local admin**: a
+connection's password is a credential for whatever account it was paired as
+on the *other* machine, sometimes a broader identity than the local account
+asking — letting a restricted local viewer transitively exercise a stored
+admin-elsewhere password would be exactly the kind of boundary this project
+has gotten wrong before. A non-admin's search still runs, just local-only,
+silently rather than refused. Proven against two real LANShare servers in
+`test/federation-routes.mjs`, including killing one mid-test.
+
+**Caching, scoped honestly.** A file is remembered in a small per-peer SQLite
+cache (`.lanshare/peers/<id>.db`, `lib/index-db.js`'s schema, unchanged) the
+moment it comes back from a *live* query — not by periodically mirroring a
+peer's whole index, which nothing here ever asks for. A file that peer holds
+but that was never part of a search result while both machines were online
+will not appear from cache. This trades completeness for honesty: what is
+cached was really seen, not synthesised, and the web gallery always shows
+when.
+
+**Two gaps left open on purpose, not by oversight:**
+- **No fetch-through-the-web-gallery yet.** A remote-only result shows where
+  it lives and whether that machine is reachable right now, but clicking it
+  cannot pull the bytes through this server — that is a proxy-download route
+  this phase did not build. Today, actually getting the file still means the
+  desktop app's existing Connections screen. Worth adding, but it is its own
+  piece of surface (streaming a remote file back through this server,
+  including range requests for video), not a small addition to search.
+- **No delete-time "this is the last copy" warning.** The data for it now
+  exists — every search result already carries `locations` — but nothing
+  reads it at the moment `/api/delete` runs. Wiring that in is comparatively
+  small and is the natural next slice of this idea, just not one this phase
+  claims to have shipped.
 
 ## J — A central index every device can reach
 

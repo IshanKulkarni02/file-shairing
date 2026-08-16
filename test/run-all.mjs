@@ -58,12 +58,14 @@ const SUITES = [
   { name: 'metadata', file: 'metadata.mjs', kind: 'plain' },
   { name: 'index-db', file: 'index-db.mjs', kind: 'plain' },
   { name: 'indexer', file: 'indexer.mjs', kind: 'plain' },
+  { name: 'federation', file: 'federation.mjs', kind: 'plain' },
   { name: 'smoke', file: 'smoke.mjs', kind: 'server' },
   { name: 'permissions', file: 'permissions.mjs', kind: 'server' },
   { name: 'vault-routes', file: 'vault-routes.mjs', kind: 'server' },
   { name: 'location-routes', file: 'location-routes.mjs', kind: 'server' },
   { name: 'sync-routes', file: 'sync-routes.mjs', kind: 'server' },
   { name: 'search-routes', file: 'search-routes.mjs', kind: 'server' },
+  { name: 'federation-routes', file: 'federation-routes.mjs', kind: 'plain' },
   { name: 'media', file: 'media.mjs', kind: 'server', slow: true },
   { name: 'pwa', file: 'pwa.mjs', kind: 'https', slow: true },
   { name: 'electron-links', file: 'electron-links.js', kind: 'electron' },
@@ -131,9 +133,27 @@ async function startServer() {
   }
 }
 
+/**
+ * Kill the test server and wait for it to actually be gone before returning.
+ *
+ * `child.kill()` only requests termination — it returns immediately, before
+ * the OS has necessarily finished tearing the process down. rmSync() used to
+ * run right after it with nothing in between, which raced a still-closing
+ * SQLite WAL file on Windows often enough to occasionally fail the whole
+ * suite on a clean run with EBUSY, for a reason that had nothing to do with
+ * whatever suite happened to run last.
+ */
 function stopServer() {
-  if (server && !server.killed) server.kill();
-  server = null;
+  return new Promise((resolve) => {
+    if (!server || server.killed) { server = null; resolve(); return; }
+    const proc = server;
+    server = null;
+    proc.once('exit', () => resolve());
+    proc.kill();
+    // Windows does not reliably deliver process signals; if 'exit' never
+    // fires, this still lets cleanup proceed rather than hang the suite.
+    setTimeout(resolve, 5000);
+  });
 }
 
 const chosen = SUITES
@@ -190,7 +210,7 @@ try {
   console.error(`\n  Could not run the suites: ${err.message}\n`);
   totalFailed++;
 } finally {
-  stopServer();
+  await stopServer();
   rmSync(HOME, { recursive: true, force: true });
 }
 
