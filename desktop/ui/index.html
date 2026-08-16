@@ -131,6 +131,9 @@
   <button class="nav__item" data-panel="sync">
     <span class="dot">◍</span> Sync
   </button>
+  <button class="nav__item" data-panel="rules">
+    <span class="dot">◔</span> Sorting rules
+  </button>
   <button class="nav__item" data-panel="connections">
     <span class="dot">◎</span> Machines
   </button>
@@ -428,6 +431,50 @@
         <button class="btn btn--primary" id="syncConfirmBtn">Run this sync</button>
         <button class="btn btn--ghost" id="syncCancelBtn">Close</button>
       </div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-rules">
+    <h1>Sorting rules</h1>
+    <p class="panel__sub">
+      Where files land, decided by rules you write — one per line, ordered,
+      first match wins. Saved rules are versioned in git automatically, so
+      "why has everything gone to /Drone since Tuesday" is always a
+      <code>git log</code> away.
+    </p>
+
+    <div class="card">
+      <h3 style="font-size:.9rem;margin-bottom:.6rem">Your rules</h3>
+      <textarea class="field__input" id="rulesText" rows="8" spellcheck="false"
+        style="font-family:ui-monospace,Consolas,monospace;font-size:.85rem;white-space:pre;resize:vertical"
+        placeholder='when camera.make = &quot;DJI&quot; -&gt; /Drone/{year}/{month}&#10;when kind = video and gps near &quot;Manali&quot; -&gt; /Rides/Manali'></textarea>
+      <p class="field__error" id="rulesError"></p>
+      <div class="field-row" style="margin-top:.6rem">
+        <button class="btn btn--primary" id="rulesSaveBtn">Save rules</button>
+        <button class="btn btn--ghost" id="rulesPreviewBtn">Preview what would move</button>
+      </div>
+      <p class="panel__sub" id="rulesSaveNote" style="margin:.6rem 0 0"></p>
+    </div>
+
+    <div class="card" id="rulesPreviewCard" hidden>
+      <h3 style="font-size:.9rem;margin-bottom:.2rem">What applying these rules would do</h3>
+      <p class="panel__sub" style="margin:0 0 .6rem" id="rulesPreviewSub">Nothing has moved yet.</p>
+      <div class="row-list" id="rulesPreviewList" style="max-height:260px;overflow:auto"></div>
+      <div class="field-row" style="margin-top:.75rem">
+        <button class="btn btn--primary" id="rulesApplyBtn">Apply now</button>
+        <button class="btn btn--ghost" id="rulesPreviewCloseBtn">Close</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:.9rem;margin-bottom:.6rem">Recent activity</h3>
+      <div class="row-list" id="rulesBatchList"></div>
+      <p class="panel__sub" id="rulesBatchNote" style="margin:.6rem 0 0"></p>
+    </div>
+
+    <div class="card" id="rulesHistoryCard" hidden>
+      <h3 style="font-size:.9rem;margin-bottom:.6rem">History</h3>
+      <div class="row-list" id="rulesHistoryList"></div>
     </div>
   </section>
 

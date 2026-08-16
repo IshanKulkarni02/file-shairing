@@ -60,6 +60,9 @@ const captureDeviceLib = require('../lib/capture-device');
 const captureWatcherLib = require('../lib/capture-watcher');
 const importLib = require('../lib/import');
 const indexerLib = require('../lib/indexer');
+const sortRulesLib = require('../lib/sort-rules');
+const sortEngineLib = require('../lib/sort-engine');
+const indexDbLib = require('../lib/index-db');
 
 const { config, generated } = configLib.loadOrCreate();
 
@@ -362,7 +365,9 @@ function guarded(fn) {
         || err instanceof locations.LocationError
         || err instanceof syncTargets.SyncTargetError
         || err instanceof syncEngine.SyncError
-        || err instanceof importLib.ImportError) {
+        || err instanceof importLib.ImportError
+        || err instanceof sortRulesLib.SortRulesError
+        || err instanceof sortEngineLib.SortEngineError) {
         return { ok: false, error: err.message };
       }
       throw err;
@@ -613,6 +618,56 @@ function throttledProgress(id) {
   };
 }
 
+// --- sorting rules (Phase L) -------------------------------------------------
+// Mirrors the /api/sort-rules* HTTP routes in lib/server-app.js — those exist
+// for the web gallery and anything else talking HTTP; this talks to the same
+// lib/ modules directly, the same way sync:* above calls syncTargets/syncEngine
+// rather than looping back through its own server over HTTP.
+
+function currentIndexEntries() {
+  if (!serverHandle?.indexDb) return [];
+  return serverHandle.indexDb.search({ limit: 1_000_000 }).map(indexDbLib.dbRowToResult);
+}
+
+ipcMain.handle('rules:get', () => {
+  const text = sortRulesLib.readRulesText(libraryPath());
+  let ruleCount = 0;
+  let error = null;
+  try {
+    ruleCount = sortRulesLib.parse(text).length;
+  } catch (err) {
+    error = err.message;
+  }
+  return {
+    text, ruleCount, error, gitAvailable: sortRulesLib.isGitAvailable(), history: sortRulesLib.ruleHistory(libraryPath()),
+  };
+});
+
+ipcMain.handle('rules:save', guarded((event, text) => {
+  const parsed = sortRulesLib.saveRulesText(libraryPath(), text, { message: 'Update sorting rules' });
+  return { ruleCount: parsed.length };
+}));
+
+ipcMain.handle('rules:plan', guarded(async () => {
+  const result = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries() });
+  return { result };
+}));
+
+ipcMain.handle('rules:apply', guarded(async () => {
+  const planned = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries() });
+  const batch = await sortEngineLib.apply({ library: libraryPath(), moves: planned.moves });
+  if (serverHandle?.indexDb) await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
+  return { batch };
+}));
+
+ipcMain.handle('rules:batches', () => ({ batches: sortEngineLib.loadBatches(libraryPath()) }));
+
+ipcMain.handle('rules:undo', guarded(async () => {
+  const result = await sortEngineLib.undoLastBatch({ library: libraryPath() });
+  if (serverHandle?.indexDb) await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
+  return result;
+}));
+
 // --- importing from a camera, drone or card (Phase K) -----------------------
 
 /**
@@ -635,6 +690,11 @@ ipcMain.handle('capture:pending', () => (pendingCapture ? {
   alreadyImported: pendingCapture.plan.alreadyImported,
 } : null));
 
+/** An absolute path under the library, as the "/Foo/bar.jpg" form every route and rule uses. */
+function toLibraryRelPath(absPath) {
+  return `/${path.relative(libraryPath(), absPath).split(path.sep).join('/')}`;
+}
+
 ipcMain.handle('capture:importNow', guarded(async () => {
   if (!pendingCapture) throw new importLib.ImportError('There is nothing waiting to be imported');
   const { volume, plan } = pendingCapture;
@@ -651,18 +711,42 @@ ipcMain.handle('capture:importNow', guarded(async () => {
     },
   });
 
+  let sorted = 0;
   // The library's index has no idea any of this happened until its next
-  // scan — kicked off here rather than left to whatever the next scheduled
-  // scan happens to be, so the newly-imported files are actually findable
-  // by search right away, and so a re-inserted card correctly sees them as
-  // already-imported next time.
+  // scan. Awaited here, not fired-and-forgotten like the sync watcher's own
+  // background scans are — sorting rules need EXIF/GPS metadata that only
+  // exists once this scan has actually read these specific new files, so
+  // there is nothing useful to do until it finishes.
   if (serverHandle?.indexDb) {
-    indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb).catch((err) => {
-      console.warn(`[capture] post-import scan failed: ${err.message}`);
-    });
+    try {
+      await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
+
+      // If sorting rules exist, give them first say over where each newly
+      // imported file actually belongs — /Imports/<device> (importDestination
+      // above) is the fallback for whatever no rule claims, not the last
+      // word. Scoped to exactly the files just imported, never the rest of
+      // the library — that is what the rules screen's own "apply" is for.
+      const rulesText = sortRulesLib.readRulesText(libraryPath());
+      if (rulesText.trim()) {
+        const entries = result.copied
+          .map((c) => serverHandle.indexDb.getByPath(toLibraryRelPath(c.dest)))
+          .filter(Boolean)
+          .map(indexDbLib.dbRowToResult);
+        const planned = await sortEngineLib.plan({ library: libraryPath(), entries, rulesText });
+        if (planned.moves.length) {
+          const batch = await sortEngineLib.apply({ library: libraryPath(), moves: planned.moves });
+          sorted = batch.moved.length;
+          await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
+        }
+      }
+    } catch (err) {
+      console.warn(`[capture] post-import scan/sort failed: ${err.message}`);
+    }
   }
 
-  return { destDir, copied: result.copied.length, failed: result.failed };
+  return {
+    destDir, copied: result.copied.length, failed: result.failed, sorted,
+  };
 }));
 
 ipcMain.handle('capture:dismiss', () => { pendingCapture = null; return {}; });

@@ -1,0 +1,215 @@
+/**
+ * lib/sort-engine.js against real files on real disk: planning a sort,
+ * applying it, and undoing it.
+ *
+ *   node test/sort-engine.mjs
+ */
+
+import {
+  mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const engine = require(path.join(here, '..', 'lib', 'sort-engine.js'));
+const sortRules = require(path.join(here, '..', 'lib', 'sort-rules.js'));
+
+let pass = 0;
+let fail = 0;
+function check(name, ok, detail = '') {
+  if (ok) { pass++; console.log(`  PASS  ${name}`); }
+  else { fail++; console.log(`  FAIL  ${name}${detail ? ' -> ' + detail : ''}`); }
+}
+
+function scratchLibrary() {
+  return mkdtempSync(path.join(tmpdir(), 'lanshare-sort-engine-'));
+}
+
+function putFile(library, relPath, content = 'x') {
+  const abs = path.join(library, ...relPath.split('/').filter(Boolean));
+  mkdirSync(path.dirname(abs), { recursive: true });
+  writeFileSync(abs, content);
+  return abs;
+}
+
+// --- plan(): matching, non-matching, and already-in-place -------------------
+
+{
+  const library = scratchLibrary();
+  try {
+    sortRules.saveRulesText(library, 'when camera.make = "DJI" -> /Drone/{year}');
+    putFile(library, '/Inbox/a.jpg');
+    putFile(library, '/Inbox/b.jpg');
+    putFile(library, '/Drone/2026/already-here.jpg');
+
+    const entries = [
+      { path: '/Inbox/a.jpg', name: 'a.jpg', cameraMake: 'DJI', capturedAt: '2026-03-15T00:00:00' },
+      { path: '/Inbox/b.jpg', name: 'b.jpg', cameraMake: 'Canon', capturedAt: '2026-03-15T00:00:00' },
+      { path: '/Drone/2026/already-here.jpg', name: 'already-here.jpg', cameraMake: 'DJI', capturedAt: '2026-01-01T00:00:00' },
+    ];
+    const result = await engine.plan({ library, entries });
+
+    check('a matching file is planned to move', result.moves.some((m) => m.path === '/Inbox/a.jpg' && m.destinationAlbum === '/Drone/2026'), JSON.stringify(result.moves));
+    check('a non-matching file is reported unmatched, not planned to move',
+      result.unmatched.includes('/Inbox/b.jpg') && !result.moves.some((m) => m.path === '/Inbox/b.jpg'));
+    check('a file already exactly where its rule would put it is left out of the plan entirely',
+      !result.moves.some((m) => m.path === '/Drone/2026/already-here.jpg'), JSON.stringify(result.moves));
+    check('the plan reports how many rules were active', result.ruleCount === 1);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+// --- apply(): files actually move, a batch is recorded ----------------------
+
+{
+  const library = scratchLibrary();
+  try {
+    const fromAbs = putFile(library, '/Inbox/photo.jpg', 'real bytes');
+    const result = await engine.apply({
+      library,
+      moves: [{ path: '/Inbox/photo.jpg', name: 'photo.jpg', destinationAlbum: '/Drone/2026' }],
+    });
+
+    check('the move is reported successful', result.moved.length === 1 && result.failed.length === 0, JSON.stringify(result));
+    check('the file no longer exists at its old path', !existsSync(fromAbs));
+    const toAbs = path.join(library, 'Drone', '2026', 'photo.jpg');
+    check('the file exists at the new path with its content intact',
+      existsSync(toAbs) && readFileSync(toAbs, 'utf8') === 'real bytes');
+
+    const batches = engine.loadBatches(library);
+    check('a batch was recorded', batches.length === 1 && batches[0].moved.length === 1, JSON.stringify(batches));
+    check('the batch records exactly the from/to that happened',
+      batches[0].moved[0].from === '/Inbox/photo.jpg' && batches[0].moved[0].to === '/Drone/2026/photo.jpg');
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+// --- apply(): a name collision at the destination is disambiguated, not overwritten --
+
+{
+  const library = scratchLibrary();
+  try {
+    putFile(library, '/Inbox/photo.jpg', 'the one being moved');
+    putFile(library, '/Drone/2026/photo.jpg', 'an unrelated file already there');
+
+    const result = await engine.apply({
+      library,
+      moves: [{ path: '/Inbox/photo.jpg', name: 'photo.jpg', destinationAlbum: '/Drone/2026' }],
+    });
+
+    check('the move still succeeds despite the name collision', result.moved.length === 1, JSON.stringify(result));
+    check('the pre-existing file at that name is untouched',
+      readFileSync(path.join(library, 'Drone', '2026', 'photo.jpg'), 'utf8') === 'an unrelated file already there');
+    check('the moved file landed under a disambiguated name',
+      readFileSync(path.join(library, 'Drone', '2026', 'photo (2).jpg'), 'utf8') === 'the one being moved');
+    check('the batch correctly records the disambiguated destination, not the original name',
+      engine.loadBatches(library)[0].moved[0].to === '/Drone/2026/photo (2).jpg');
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+// --- apply(): a move that cannot happen is reported failed, not thrown ------
+
+{
+  const library = scratchLibrary();
+  try {
+    // No such source file at all.
+    const result = await engine.apply({
+      library,
+      moves: [{ path: '/Inbox/does-not-exist.jpg', name: 'does-not-exist.jpg', destinationAlbum: '/Somewhere' }],
+    });
+    check('a move whose source does not exist is reported failed, not thrown', result.failed.length === 1 && result.moved.length === 0, JSON.stringify(result));
+    check('no batch is recorded when nothing actually moved', engine.loadBatches(library).length === 0);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+// --- undoLastBatch(): restores files, removes the batch once fully undone ----
+
+{
+  const library = scratchLibrary();
+  try {
+    putFile(library, '/Inbox/one.jpg', 'one');
+    putFile(library, '/Inbox/two.jpg', 'two');
+    await engine.apply({
+      library,
+      moves: [
+        { path: '/Inbox/one.jpg', name: 'one.jpg', destinationAlbum: '/Sorted' },
+        { path: '/Inbox/two.jpg', name: 'two.jpg', destinationAlbum: '/Sorted' },
+      ],
+    });
+    check('both files really did move', existsSync(path.join(library, 'Sorted', 'one.jpg')) && existsSync(path.join(library, 'Sorted', 'two.jpg')));
+
+    const undone = await engine.undoLastBatch({ library });
+    check('undo reports both files restored', undone.restored.length === 2 && undone.failed.length === 0, JSON.stringify(undone));
+    check('both files are back at their original paths',
+      existsSync(path.join(library, 'Inbox', 'one.jpg')) && existsSync(path.join(library, 'Inbox', 'two.jpg')));
+    check('and gone from the sorted destination', !existsSync(path.join(library, 'Sorted', 'one.jpg')) && !existsSync(path.join(library, 'Sorted', 'two.jpg')));
+    check('the fully-undone batch is removed from history', engine.loadBatches(library).length === 0);
+
+    let rejected = null;
+    try { await engine.undoLastBatch({ library }); } catch (err) { rejected = err; }
+    check('undoing again with nothing left to undo is refused clearly',
+      rejected instanceof engine.SortEngineError, String(rejected));
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+// --- undoLastBatch(): a blocked restore is partial, not all-or-nothing -------
+
+{
+  const library = scratchLibrary();
+  try {
+    putFile(library, '/Inbox/only.jpg', 'the moved file');
+    await engine.apply({
+      library,
+      moves: [{ path: '/Inbox/only.jpg', name: 'only.jpg', destinationAlbum: '/Sorted' }],
+    });
+
+    // Something new now occupies the original spot — undo must not clobber it.
+    putFile(library, '/Inbox/only.jpg', 'a different file that showed up later');
+
+    const undone = await engine.undoLastBatch({ library });
+    check('the blocked restore is reported failed, not silently skipped or forced',
+      undone.restored.length === 0 && undone.failed.length === 1, JSON.stringify(undone));
+    check('the file that showed up later at the original path is untouched',
+      readFileSync(path.join(library, 'Inbox', 'only.jpg'), 'utf8') === 'a different file that showed up later');
+    check('the moved file is still at its sorted location, not lost',
+      readFileSync(path.join(library, 'Sorted', 'only.jpg'), 'utf8') === 'the moved file');
+    check('the batch stays in history, since it is not fully undone yet', engine.loadBatches(library).length === 1);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+// --- a plan referencing a "gps near" place, geocoded through a real cache write --
+
+{
+  const library = scratchLibrary();
+  try {
+    sortRules.saveRulesText(library, 'when gps near "Testville" -> /Rides/Testville');
+    // Pre-seed the geocode cache so this test needs no real network call —
+    // resolveMany() only skips the network for what is already cached.
+    const geocode = require(path.join(here, '..', 'lib', 'geocode.js'));
+    geocode.saveCache(library, { testville: { lat: 10, lon: 20 } });
+
+    const entries = [{ path: '/Inbox/ride.jpg', name: 'ride.jpg', gpsLat: 10.01, gpsLon: 20.01, capturedAt: null }];
+    const result = await engine.plan({ library, entries });
+    check('a plan resolves a "gps near" rule using the on-disk geocode cache, no network needed',
+      result.moves.length === 1 && result.moves[0].destinationAlbum === '/Rides/Testville', JSON.stringify(result));
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+console.log(`\n  ${pass} passed, ${fail} failed\n`);
+process.exit(fail ? 1 : 0);

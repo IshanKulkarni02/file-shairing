@@ -113,6 +113,15 @@ contextBridge.exposeInMainWorld('lanshare', {
     update: (patch) => invoke('settings:update', patch),
   },
 
+  rules: {
+    get: () => invoke('rules:get'),
+    save: (text) => invoke('rules:save', text),
+    plan: () => invoke('rules:plan'),
+    apply: () => invoke('rules:apply'),
+    batches: () => invoke('rules:batches'),
+    undo: () => invoke('rules:undo'),
+  },
+
   capture: {
     pending: () => invoke('capture:pending'),
     importNow: () => invoke('capture:importNow'),
