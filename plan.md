@@ -24,6 +24,18 @@ the internet without port forwarding.
 | E | macOS and Linux | **Code done**, unverified on real hardware |
 | F | Client mode — connect to other hosts | **Done** |
 | G | P2P over the internet | **Done** (relay; hole punching not attempted) |
+| H | Metadata and search — the foundation | Not started |
+| I | Search across every machine | Not started |
+| J | A central index every device can reach | Not started |
+| K | Import on connect — cameras, drones, cards | Not started |
+| L | Sorting rules, versioned in git | Not started |
+| M | Instructions in plain language | Not started |
+| N | Content search — the fuzzy cases | Not started |
+
+Phases A–G made one machine's library good and let machines reach each other.
+H–N are a different goal: **one searchable space across every device and
+Google Drive, that files find their own way into.** See "The file network"
+below.
 
 ---
 
@@ -785,3 +797,218 @@ keychain.
 **G — P2P.** Rendezvous server for introductions, direct WebRTC where possible,
 TURN relay when NAT refuses. End-to-end encrypted regardless of path, so relay
 and rendezvous see ciphertext only.
+
+---
+
+# The file network — phases H to N
+
+## What changes
+
+A–G built a photo library that several machines can reach. H–N build something
+different: **one searchable space across every device and Google Drive, that
+files find their own way into.**
+
+Three things do not exist yet, and everything else waits on them:
+
+1. **Nothing is indexed.** There is no search route at all. You can browse, and
+   that is it.
+2. **Nothing reads metadata.** No EXIF, so "photos from that ride" and "drone
+   shots" are unanswerable — because the answer is sitting inside the file and
+   nobody looks.
+3. **Nothing knows what other machines hold.** You can browse another host, but
+   not ask "who has this?"
+
+What *is* already built and carries straight over: reaching any machine
+(discovery, pinned certificates, the relay), copying either direction, pulling
+from a cloud folder, volume identity, and doing something when a drive appears.
+
+Storage is also already file-type agnostic — `kindOf()` returns `'file'` for
+anything it does not recognise, and upload and download never cared. **"All
+files, not just photos" is a gallery and search problem, not an architecture
+one.**
+
+---
+
+## H — Metadata and search
+
+The foundation. Nothing above works without it, and it is useful on its own the
+day it lands.
+
+A SQLite index per host holding, for every file: path, size, mtime, content
+hash, and extracted metadata — EXIF camera make and model, capture time, GPS,
+dimensions, duration. Maintained incrementally by watching the library, not by
+rescanning it.
+
+**Why EXIF is the whole game.** "Drone shots go in the drone folder" is not a
+judgement call — a DJI stamps its model into every file. So does your camera,
+your phone, your GoPro. Date, coordinates, resolution, lens. A rule reading
+that field is exact, instant, testable and self-explaining; a model guessing
+from pixels is none of those, and this app moves files. **Metadata does the
+work. AI is for what metadata cannot answer.**
+
+GPS is what makes "that place I rode to" resolvable at all: geocode the place
+name once, then match coordinates within a radius.
+
+Also lands here: **content hashing**, which pays for itself three times over —
+duplicate detection, knowing a file on two machines is the same file, and
+knowing an SD card has already been imported.
+
+Encrypted albums are indexed by what is knowable without the key — path, size,
+time — and nothing else. A vault that gave up its EXIF to the index would not
+be a vault.
+
+## I — Search across every machine
+
+Each host publishes its index; peers fetch, cache and merge it. A search asks
+everyone reachable, merges by content hash so the same file on three machines
+is one result showing three locations, and answers from cache for machines
+that are off — labelled as such. **"Last seen on the laptop three days ago" is
+a useful answer; pretending it is live is not.**
+
+One click fetches a result from wherever it lives, over the transport already
+built — LAN if it is there, relay if it is not.
+
+**Replica awareness matters more than it sounds.** Once the index knows a file
+exists in three places, it can warn before you delete the last copy. A single
+view of everything makes deleting the only remaining copy much easier to do by
+accident.
+
+## J — A central index every device can reach
+
+The requirement is "somewhere central, always up, reachable from any device,
+nothing to maintain". Two ways to meet it, same index format either way.
+
+**GitHub, encrypted.** A private repo holding an index blob sealed with
+AES-256-GCM under a key derived from a passphrase the devices share and GitHub
+never sees. Free, always up, zero maintenance, reachable anywhere. If the
+account leaked, someone gets ciphertext.
+
+Plaintext filenames must never go there. An index is more revealing than the
+files it describes: `passport-scan.pdf`, `medical-results-march.pdf`,
+`resignation-letter.docx`, plus sizes, dates, and which machine holds what.
+
+**The cost, stated so it is not discovered later:** encrypted data does not
+delta-compress, so every update stores a fresh full copy in git history for
+ever. Mitigated by committing on meaningful change rather than continuously,
+one index file per device so churn is isolated, and squashing history on a
+schedule. It needs doing deliberately.
+
+**The relay, alternatively.** It is already a central always-on point, already
+holds nothing readable, and has no history to bloat. If one is being run for
+internet access anyway, this is strictly better. Not either/or — same format,
+different shelf.
+
+## K — Import on connect
+
+A camera, drone, phone or SD card appears. Recognise it as a capture device — a
+`DCIM` folder is the near-universal signal — and offer:
+
+> **Import 240 files from DJI Mini 4 Pro?** Starting in 30s… [Import now]
+> [Cancel] [Never for this card]
+
+Then copy, verify, and sort by the rules from L. **It never deletes from the
+card**, on any path, ever. Formatting the card is the owner's decision, made
+after they can see the files arrived.
+
+What has already been imported is remembered by content hash, so re-inserting
+the same card picks up only what is new. Free space is checked before starting
+rather than failing at 80%.
+
+## L — Sorting rules, versioned in git
+
+Rules are small, human-meaningful, change rarely, contain nothing private, and
+benefit enormously from history — *why has everything gone to /Drone since
+Tuesday?* → `git log`. **That is what git is genuinely good for here.** The file
+index is the opposite on all four counts.
+
+A rule is a filter and a destination:
+
+```
+when camera.make = "DJI"                 → /Drone/{year}/{month}
+when kind = video and gps near "Manali"  → /Rides/Manali
+```
+
+Ordered, first match wins, with a dry run showing exactly which files would go
+where before anything moves. **Every rule-driven move is undoable as one
+batch** — automated sorting will be wrong sometimes, and the difference between
+a good feature and a frightening one is whether it can be taken back.
+
+## M — Instructions in plain language
+
+The settings UI you talk to. Not an agent with file access — a translator that
+turns a sentence into a filter you can see.
+
+> *"I was on a motorcycle ride today at Manali, move all pics and videos to
+> /Rides/Manali and store it in Google Drive"*
+
+becomes
+
+```
+date = 2026-08-11
+gps within 2 km of Manali (32.24, 77.19)
+kind in (image, video)
+→ move to /Rides/Manali, then push to Google Drive
+```
+
+and then: **"47 files match — here they are. Proceed?"**
+
+The model drafts, the tested code executes, and a person approves in between. A
+wrong draft is visible and costs a click, which is why a small local model is
+sufficient — and why it is never trusted with a file operation.
+
+Standing instructions ("keep all drone shots here") are saved as rules; one-off
+ones run once.
+
+A local 7–8B model fits the RTX 3060's 6 GB VRAM at 4-bit. Ample for drafting a
+filter, inadequate for being trusted with deletions — which is exactly the
+split this design already makes.
+
+## N — Content search
+
+For what metadata cannot answer: "photos of whiteboards", "the one with the red
+bike". CLIP embeddings computed locally, roughly 1–2 GB of model, comfortable on
+this GPU. Optional, and last, because metadata answers most questions first and
+answers them exactly.
+
+---
+
+## Worth adding, not in the original vision
+
+- **Duplicate detection.** Merging several devices into one view will surface
+  the same file many times over. Content hashing is already there for other
+  reasons, so this is nearly free and makes the merged view usable at all.
+- **Last-copy protection.** Warn before deleting a file the index believes
+  exists nowhere else. Knowing that is the whole point of a central view.
+- **A push-to-cloud policy that never deletes.** *"…and store it in Google
+  Drive"* needs one. Today `mirror` would push *and delete* whatever Drive holds
+  that the library does not — wrong here, and destructive on a shared folder.
+  It is the mirror image of the `pull` policy, and small.
+- **Undo for anything automatic.** Rules and imports move files without asking
+  each time. One batch, one undo.
+- **Stale-index honesty.** Show when a machine was last seen rather than
+  implying its answer is current.
+- **Text extraction, later.** OCR and PDF text would make "all files" genuinely
+  searchable rather than searchable by name. Real work; worth its own phase if
+  it turns out to matter.
+
+## Fix on the way through
+
+- **Firewall rules are added without checking for duplicates**, so every setup
+  run stacked more — ten on this machine after a handful of runs — and neither
+  the app nor the uninstaller removes them.
+- **The uninstaller leaves a 203 MB installer cache** behind in
+  `%LOCALAPPDATA%\lanshare-updater`.
+
+## Risks, stated plainly
+
+- **Automatic sorting is the riskiest thing here.** It moves files without
+  asking each time. Dry runs, batch undo, and never deleting from a source are
+  the mitigations, and none of them is optional.
+- **A stale index is worse than no index** if presented as current — the file it
+  promises may be gone. Labelling and last-seen times are the fix.
+- **The natural-language layer will misread instructions.** Bounded by never
+  letting it act: it drafts, a preview shows, a person approves.
+- **Encrypted index history will bloat git** unless managed deliberately.
+- **Scope.** H–N is comparable in size to A–G together. H and I alone deliver
+  most of the daily value; K and L are what make it feel automatic; M is the
+  polish on top.
