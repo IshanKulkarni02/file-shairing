@@ -42,6 +42,7 @@ const panelLoaders = {
   vaults: () => loadVaults(),
   library: () => loadLibrary(),
   sync: () => loadSync(),
+  rules: () => loadRules(),
   connections: () => loadConnections(),
   settings: () => loadSettings(),
 };
@@ -1600,8 +1601,11 @@ async function runCaptureImport() {
     }
     showCaptureState('done');
     const failedNote = result.failed?.length ? ` (${result.failed.length} could not be copied)` : '';
+    const sortedNote = result.sorted
+      ? ` ${result.sorted} of them already moved on to where your sorting rules put them.`
+      : '';
     $('captureDoneNote').textContent = `Imported ${result.copied} `
-      + `file${result.copied === 1 ? '' : 's'} into "${result.destDir}"${failedNote}.`;
+      + `file${result.copied === 1 ? '' : 's'} into "${result.destDir}"${failedNote}.${sortedNote}`;
   } catch (err) {
     showCaptureState('progress');
     $('captureProgressNote').textContent = err.message;
@@ -1639,6 +1643,161 @@ window.lanshare.capture.onProgress(({ done, total }) => {
 window.lanshare.capture.pending().then((detected) => {
   if (detected) renderCapturePrompt(detected);
 });
+
+// ---------------------------------------------------------------------------
+// Sorting rules (Phase L)
+// ---------------------------------------------------------------------------
+
+let lastRulesPlan = null;
+
+async function loadRules() {
+  const state = await window.lanshare.rules.get();
+  // Never stomp on text someone is mid-edit of.
+  if (document.activeElement !== $('rulesText')) $('rulesText').value = state.text;
+  $('rulesError').textContent = state.error || '';
+  $('rulesError').classList.toggle('is-shown', Boolean(state.error));
+
+  renderRulesHistory(state.history, state.gitAvailable);
+  await loadRulesBatches();
+}
+
+function renderRulesHistory(history, gitAvailable) {
+  $('rulesHistoryCard').hidden = !gitAvailable || !history?.length;
+  const container = $('rulesHistoryList');
+  container.textContent = '';
+  for (const entry of history || []) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="row__main"><div class="row__title"></div><div class="row__sub"></div></div>';
+    row.querySelector('.row__title').textContent = entry.subject;
+    row.querySelector('.row__sub').textContent = `${new Date(entry.date).toLocaleString()} — ${entry.hash.slice(0, 8)}`;
+    container.append(row);
+  }
+}
+
+async function loadRulesBatches() {
+  const { batches } = await window.lanshare.rules.batches();
+  const container = $('rulesBatchList');
+  container.textContent = '';
+
+  if (!batches?.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">Nothing has been sorted yet.</p>';
+    $('rulesBatchNote').textContent = '';
+    return;
+  }
+
+  const latest = batches[0];
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `
+    <div class="row__main">
+      <div class="row__title"></div>
+      <div class="row__sub"></div>
+    </div>
+    <div class="row__actions">
+      <button class="btn btn--sm btn--danger" id="rulesUndoBtn">Undo</button>
+    </div>`;
+  row.querySelector('.row__title').textContent = `${latest.moved.length} file${latest.moved.length === 1 ? '' : 's'} sorted`;
+  row.querySelector('.row__sub').textContent = new Date(latest.at).toLocaleString()
+    + (latest.failed.length ? ` — ${latest.failed.length} could not be moved` : '');
+  container.append(row);
+
+  $('rulesBatchNote').textContent = batches.length > 1 ? `${batches.length - 1} earlier batch(es) also on record.` : '';
+
+  $('rulesUndoBtn').addEventListener('click', async () => {
+    $('rulesUndoBtn').disabled = true;
+    try {
+      const result = await window.lanshare.rules.undo();
+      if (!result.ok) { $('rulesBatchNote').textContent = result.error; return; }
+      await loadRulesBatches();
+    } finally {
+      $('rulesUndoBtn').disabled = false;
+    }
+  });
+}
+
+$('rulesSaveBtn').addEventListener('click', async () => {
+  $('rulesError').classList.remove('is-shown');
+  $('rulesSaveBtn').disabled = true;
+  try {
+    const result = await window.lanshare.rules.save($('rulesText').value);
+    if (!result.ok) {
+      $('rulesError').textContent = result.error;
+      $('rulesError').classList.add('is-shown');
+      return;
+    }
+    $('rulesSaveNote').textContent = `Saved — ${result.ruleCount} rule${result.ruleCount === 1 ? '' : 's'} active.`;
+    await loadRules();
+  } finally {
+    $('rulesSaveBtn').disabled = false;
+  }
+});
+
+$('rulesPreviewBtn').addEventListener('click', async () => {
+  $('rulesPreviewBtn').disabled = true;
+  $('rulesPreviewBtn').textContent = 'Checking…';
+  try {
+    const result = await window.lanshare.rules.plan();
+    if (!result.ok) {
+      $('rulesError').textContent = result.error;
+      $('rulesError').classList.add('is-shown');
+      return;
+    }
+    lastRulesPlan = result.result;
+    renderRulesPreview(lastRulesPlan);
+  } finally {
+    $('rulesPreviewBtn').disabled = false;
+    $('rulesPreviewBtn').textContent = 'Preview what would move';
+  }
+});
+
+function renderRulesPreview(planResult) {
+  $('rulesPreviewCard').hidden = false;
+  const container = $('rulesPreviewList');
+  container.textContent = '';
+
+  if (!planResult.moves.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">Nothing would move — every file is '
+      + 'already where its rules put it.</p>';
+  } else {
+    for (const move of planResult.moves.slice(0, 200)) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = '<div class="row__main"><div class="row__title"></div><div class="row__sub"></div></div>';
+      row.querySelector('.row__title').textContent = move.name;
+      row.querySelector('.row__sub').textContent = `${move.path}  →  ${move.destinationAlbum}`;
+      container.append(row);
+    }
+  }
+
+  $('rulesPreviewSub').textContent = `${planResult.moves.length} file${planResult.moves.length === 1 ? '' : 's'} `
+    + `would move, ${planResult.unmatched.length} match no rule and would stay put.`
+    + (planResult.moves.length > 200 ? ' Showing the first 200.' : '');
+  $('rulesApplyBtn').disabled = !planResult.moves.length;
+}
+
+$('rulesApplyBtn').addEventListener('click', async () => {
+  if (!lastRulesPlan?.moves.length) return;
+  if (!confirm(`Move ${lastRulesPlan.moves.length} file(s) now? This can be undone as one action afterwards.`)) return;
+
+  $('rulesApplyBtn').disabled = true;
+  $('rulesApplyBtn').textContent = 'Applying…';
+  try {
+    const result = await window.lanshare.rules.apply();
+    if (!result.ok) {
+      $('rulesPreviewSub').textContent = result.error;
+      return;
+    }
+    $('rulesPreviewCard').hidden = true;
+    lastRulesPlan = null;
+    await loadRulesBatches();
+  } finally {
+    $('rulesApplyBtn').disabled = false;
+    $('rulesApplyBtn').textContent = 'Apply now';
+  }
+});
+
+$('rulesPreviewCloseBtn').addEventListener('click', () => { $('rulesPreviewCard').hidden = true; });
 
 // ---------------------------------------------------------------------------
 // First-run setup

@@ -28,7 +28,7 @@ the internet without port forwarding.
 | I | Search across every machine | **Done** (see note below — one gap left open on purpose) |
 | J | A central index every device can reach | **Done** (relay-backed; GitHub not built, see note) |
 | K | Import on connect — cameras, drones, cards | **Done** |
-| L | Sorting rules, versioned in git | Not started |
+| L | Sorting rules, versioned in git | **Done** |
 | M | Instructions in plain language | Not started |
 | N | Content search — the fuzzy cases | Not started |
 
@@ -1086,6 +1086,57 @@ Ordered, first match wins, with a dry run showing exactly which files would go
 where before anything moves. **Every rule-driven move is undoable as one
 batch** — automated sorting will be wrong sometimes, and the difference between
 a good feature and a frightening one is whether it can be taken back.
+
+**Built:** `lib/sort-rules.js` is a small hand-written parser for exactly the
+format sketched above — one rule per line, `#` comments, ANDed clauses
+optionally ORed together (disjunctive normal form; no parentheses, because
+nothing this format needs to express requires them, and a fully general
+boolean grammar is a lot of surface for something meant to stay readable by
+someone who is not a programmer). Saving a rule set parses it first, so a
+broken rule is refused before it ever reaches disk, and — when `git` is on
+the machine's PATH — commits it to a small dedicated repo under
+`.lanshare/rules`, local `user.name`/`user.email` only, never touching
+anyone's real git identity. No git installed is not an error: the rules
+still save, just without history, the same "optional tool, graceful
+degradation" treatment ffmpeg already gets elsewhere in this app.
+
+`lib/geocode.js` resolves a `gps near "Place"` clause's place name through
+OpenStreetMap's Nominatim — free, keyless, chosen for the same reason the
+relay won over GitHub in Phase J: usable without anyone first setting up an
+account. Rate-limited to Nominatim's own policy (one request per second) and
+cached to disk indefinitely once resolved — but a *failed* lookup is
+deliberately **not** cached, since caching a miss forever has no way to
+self-correct if the failure was only ever the network having a bad moment,
+while retrying costs nothing extra beyond the one request, since geocoding
+only ever runs when a person is actively working with rules, never on a
+background loop.
+
+`lib/sort-engine.js` is the three verbs: `plan()` (read-only — a file
+already exactly where its own matching rule would put it is left out
+entirely, which is also what makes applying the same rules twice a no-op the
+second time), `apply()` (same-volume rename, or a verified copy-then-delete
+for a relocated album on another drive — the original is only ever removed
+after the copy is re-hashed and found to match), and `undoLastBatch()`
+(moves everything in the most recent batch back; a partially-blocked undo —
+something new now sits where a file used to be — leaves only the
+still-stuck files in the batch record rather than losing track of what is
+and is not back in place, so calling undo again only retries those).
+
+Reachable two ways: `/api/sort-rules*` (admin-only, `lib/server-app.js`) for
+the web gallery or anything else over HTTP, and a `rules:*` IPC namespace in
+the desktop app that calls the same `lib/` modules directly — mirroring
+exactly how `sync:*` already works, rather than looping the desktop app
+back through its own HTTP server. A new "Sorting rules" screen in the
+desktop app (plain textarea, preview, apply, undo, and — when git is
+available — a visible history list) is the one place both paths converge.
+
+Phase K's import now consults these rules too: after a card's files are
+copied to `/Imports/<device>` and indexed (metadata a rule might need — EXIF
+camera fields, GPS — only exists once that scan has actually read the new
+files), a sort plan scoped to *exactly those files* runs automatically, and
+anything a rule claims moves on from the import folder immediately.
+`/Imports/<device>` is where whatever no rule claims stays, not a queue
+waiting to be manually re-filed.
 
 ## M — Instructions in plain language
 
