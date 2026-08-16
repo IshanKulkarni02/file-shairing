@@ -12,6 +12,12 @@ const state = {
   viewerIndex: -1,
   // The vault covering the current folder, if any: { path, type, locked }.
   vault: null,
+  // Search replaces state.folders/files with results spanning every album
+  // this account can reach, rather than just the current one. state.path
+  // itself is left untouched while searching, so clearing the search is
+  // just re-navigating to wherever browsing was left off.
+  searching: false,
+  searchQuery: '',
 };
 
 /**
@@ -158,9 +164,9 @@ function spanClass(index) {
   return '';
 }
 
-function buildTile(file, index) {
+function buildTile(file, index, { searchMode = false } = {}) {
   const tile = document.createElement('article');
-  tile.className = `tile${spanClass(index)}`;
+  tile.className = `tile${spanClass(index)}${searchMode ? ' tile--search' : ''}`;
   tile.dataset.path = file.path;
   tile.style.animationDelay = `${Math.min(index, 12) * 40}ms`;
 
@@ -211,7 +217,24 @@ function buildTile(file, index) {
   const name = document.createElement('div');
   name.className = 'tile__name';
   name.textContent = file.name;
+  if (searchMode) {
+    const parent = document.createElement('span');
+    parent.className = 'tile__parent';
+    parent.textContent = file.path.slice(0, file.path.lastIndexOf('/')) || '/';
+    name.append(document.createElement('br'), parent);
+  }
   tile.append(name);
+
+  // A search result found inside a vault: the route already never returns
+  // one from a locked vault, so anything encrypted here is either an
+  // unlocked one or an end-to-end album. Either way, flag it rather than
+  // pretend it is an ordinary file.
+  if (searchMode && file.encrypted) {
+    const lock = document.createElement('div');
+    lock.className = 'tile__lock';
+    lock.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><use href="#i-lock"/></svg>';
+    tile.append(lock);
+  }
 
   const check = document.createElement('button');
   check.className = 'tile__check';
@@ -225,6 +248,22 @@ function buildTile(file, index) {
 
   tile.addEventListener('click', () => {
     if (state.selected.size) { toggleSelect(file.path); return; }
+    if (searchMode && file.encrypted) {
+      // The route already never returns a path from a locked vault, but
+      // whether the server can actually decrypt it for a preview (a
+      // server-unlock vault) or never could (end-to-end) is not something
+      // search results carry. Going to the album itself is correct either
+      // way, and it is also how "which album is this actually in" gets
+      // answered, which is half of what search is for.
+      openResultInAlbum(file);
+      return;
+    }
+    if (searchMode && file.kind !== 'image' && file.kind !== 'video') {
+      // No in-app viewer renders anything else; asking it to try would just
+      // show a broken image frame.
+      window.location.href = `/api/file?path=${q(file.path)}&dl=1`;
+      return;
+    }
     // Nothing on the server can render a preview of an end-to-end file, so
     // opening the viewer would show a broken frame. Downloading and
     // decrypting here is the only thing that can actually work.
@@ -371,17 +410,33 @@ function render() {
   const mosaic = $('mosaic');
   mosaic.textContent = '';
 
+  $('mediaHeading').textContent = state.searching ? 'Search results' : 'Photos & videos';
+
   if (state.files.length) {
     mediaSection.hidden = false;
     $('mediaCount').textContent = state.files.length;
     const fragment = document.createDocumentFragment();
-    state.files.forEach((file, index) => fragment.append(buildTile(file, index)));
+    state.files.forEach((file, index) =>
+      fragment.append(buildTile(file, index, { searchMode: state.searching })));
     mosaic.append(fragment);
   } else {
     mediaSection.hidden = true;
   }
 
-  $('empty').hidden = Boolean(state.folders.length || state.files.length);
+  const isEmpty = !state.folders.length && !state.files.length;
+  $('empty').hidden = !isEmpty;
+  if (isEmpty) {
+    if (state.searching) {
+      $('emptyTitle').textContent = 'No matches';
+      $('emptyNote').textContent = `Nothing found for "${state.searchQuery}".`;
+      $('emptyUploadBtn').hidden = true;
+    } else {
+      $('emptyTitle').textContent = 'Nothing here yet';
+      $('emptyNote').textContent = 'Add photos and videos from this device, or from your phone by '
+        + 'opening this same address there.';
+      $('emptyUploadBtn').hidden = false;
+    }
+  }
   syncVaultToolbar();
   syncSelectionUi();
 }
@@ -392,6 +447,15 @@ function render() {
  * only makes sense when there is something unlocked to lock.
  */
 function syncVaultToolbar() {
+  // These are all about the current folder, which search results are not
+  // scoped to — a result spans every album the account can reach.
+  if (state.searching) {
+    $('newVaultBtn').hidden = true;
+    $('newE2eVaultBtn').hidden = true;
+    $('newAlbumBtn').hidden = true;
+    $('lockVaultBtn').hidden = true;
+    return;
+  }
   const inVault = Boolean(state.vault);
   $('newVaultBtn').hidden = inVault;
   // A private album needs WebCrypto, which browsers only expose in a secure
@@ -414,6 +478,16 @@ async function navigate(path, { push = true } = {}) {
     state.files = data.files;
     state.vault = data.vault || null;
     state.selected.clear();
+    // Any real navigation — a crumb, an album, the back button — leaves
+    // search results behind. Without this, the toolbar and section heading
+    // would keep reporting "search results" for a folder that was reached
+    // by clicking, not searching.
+    if (state.searching) {
+      state.searching = false;
+      state.searchQuery = '';
+      $('searchInput').value = '';
+      $('searchClearBtn').hidden = true;
+    }
     render();
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (push) history.pushState({ path: data.path }, '', `#${data.path}`);
@@ -425,6 +499,78 @@ async function navigate(path, { push = true } = {}) {
 window.addEventListener('popstate', () => {
   navigate(decodeURIComponent(location.hash.slice(1)) || '/', { push: false });
 });
+
+// ---------------------------------------------------------------------------
+// Search
+//
+// Deliberately left out of the URL/history model that folders use: a search
+// is a transient lens over the whole library, not a place, so there is
+// nothing meaningful to deep-link or to go "back" to beyond wherever
+// browsing was left off. state.path is never touched while searching, so
+// leaving it is always just re-navigating there.
+// ---------------------------------------------------------------------------
+
+function searchResultToFile(row) {
+  return {
+    name: row.name,
+    path: row.path,
+    kind: row.kind,
+    size: row.size,
+    mtime: row.mtime,
+    encrypted: row.encrypted,
+    v: Math.round(row.mtime || 0),
+  };
+}
+
+async function runSearch(text) {
+  state.searching = true;
+  state.searchQuery = text;
+  state.selected.clear();
+  try {
+    const data = await api(`/api/search?q=${q(text)}`);
+    state.folders = [];
+    state.files = data.results.map(searchResultToFile);
+    state.vault = null;
+    render();
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+}
+
+/** Re-runs the current search, or refreshes the current folder when not searching. */
+function refreshView() {
+  return state.searching ? runSearch(state.searchQuery) : navigate(state.path, { push: false });
+}
+
+function clearSearch() {
+  navigate(state.path, { push: false });
+}
+
+function openResultInAlbum(file) {
+  navigate(file.path.slice(0, file.path.lastIndexOf('/')) || '/');
+}
+
+let searchDebounce = null;
+
+$('searchInput').addEventListener('input', (event) => {
+  const text = event.target.value;
+  $('searchClearBtn').hidden = !text;
+  clearTimeout(searchDebounce);
+  if (!text.trim()) {
+    if (state.searching) clearSearch();
+    return;
+  }
+  searchDebounce = setTimeout(() => runSearch(text.trim()), 300);
+});
+
+$('searchInput').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  clearTimeout(searchDebounce);
+  const text = event.target.value.trim();
+  if (text) runSearch(text);
+});
+
+$('searchClearBtn').addEventListener('click', () => clearSearch());
 
 // ---------------------------------------------------------------------------
 // Selection
@@ -463,7 +609,7 @@ $('selDelete').addEventListener('click', async () => {
     await postJson('/api/delete', { paths });
     toast(paths.length === 1 ? 'Moved to trash' : `${paths.length} moved to trash`, 'good');
     state.selected.clear();
-    await navigate(state.path, { push: false });
+    await refreshView();
   } catch (err) {
     toast(err.message, 'bad');
   }
@@ -480,7 +626,7 @@ $('selRename').addEventListener('click', async () => {
     await postJson('/api/rename', { path, name });
     toast('Renamed', 'good');
     state.selected.clear();
-    await navigate(state.path, { push: false });
+    await refreshView();
   } catch (err) {
     toast(err.message, 'bad');
   }
@@ -496,7 +642,7 @@ $('selMove').addEventListener('click', async () => {
     if (result.failures.length) toast(result.failures[0].error, 'bad');
     else toast('Moved', 'good');
     state.selected.clear();
-    await navigate(state.path, { push: false });
+    await refreshView();
   } catch (err) {
     toast(err.message, 'bad');
   }
@@ -628,7 +774,7 @@ $('viewerDelete').addEventListener('click', async () => {
     await postJson('/api/delete', { paths: [file.path] });
     toast('Moved to trash', 'good');
     closeViewer();
-    await navigate(state.path, { push: false });
+    await refreshView();
   } catch (err) {
     toast(err.message, 'bad');
   }
