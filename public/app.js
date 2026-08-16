@@ -18,6 +18,10 @@ const state = {
   // just re-navigating to wherever browsing was left off.
   searching: false,
   searchQuery: '',
+  // Set once at boot via /api/me. The server enforces every role boundary
+  // regardless — this exists only so an action nobody but an admin could
+  // ever complete is not offered to begin with.
+  role: null,
 };
 
 /**
@@ -1342,10 +1346,66 @@ $('signOutBtn').addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Central index (Phase J) — reachable from any device, once set up: a
+// shared passphrase and a relay address, walked through with the same
+// prompt()-based flow a vault passphrase already uses rather than new UI
+// chrome for something set up once and rarely touched again.
+// ---------------------------------------------------------------------------
+
+$('centralIndexBtn').addEventListener('click', async () => {
+  try {
+    const status = await api('/api/central-index/status');
+
+    if (!status.configured) {
+      const relayHost = prompt('Address of the relay every device will publish to (e.g. relay.example.com):');
+      if (!relayHost) return;
+      const relayPort = prompt('Relay port:', '8460');
+      if (!relayPort) return;
+      const passphrase = prompt(
+        'Choose a passphrase.\n\n'
+        + 'Type this same passphrase into every other device you want sharing this index. '
+        + 'It never leaves any device unencrypted, and it is not stored anywhere but here.',
+      );
+      if (!passphrase) return;
+      if (passphrase.length < 8) {
+        toast('That passphrase is too short — use at least 8 characters', 'bad');
+        return;
+      }
+      if (prompt('Type the passphrase again to confirm') !== passphrase) {
+        toast('Those did not match — nothing was set up', 'bad');
+        return;
+      }
+      await postJson('/api/central-index/setup', { relayHost, relayPort: Number(relayPort), passphrase });
+      toast('Central index set up for this device', 'good');
+      return;
+    }
+
+    const when = status.lastPublish
+      ? `Last published from this device ${new Date(status.lastPublish.at).toLocaleString()} `
+        + `(${status.lastPublish.entries} files).`
+      : 'Not yet published from this device.';
+    if (!confirm(`Central index is set up as "${status.label}".\n${when}\n\nPublish this device's index now?`)) return;
+
+    const result = await postJson('/api/central-index/publish', {});
+    toast(`Published ${result.entries} files to the central index`, 'good');
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
 $('sort').value = state.sort;
+
+// The server enforces every role boundary regardless of what is shown here
+// — this exists only so an admin-only action is not offered to an account
+// that could never complete it.
+api('/api/me').then((me) => {
+  state.role = me.role;
+  $('centralIndexBtn').hidden = me.role !== 'admin';
+}).catch(() => {});
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   // Browsers refuse to register a worker over plain http on a LAN address,

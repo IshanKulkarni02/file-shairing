@@ -40,8 +40,26 @@
  * Building the fallback first means the feature works everywhere; direct
  * connections can be added later as an optimisation without changing any of
  * the protocol above this line.
+ *
+ * ## The one exception to "no state on disk" (Phase J)
+ *
+ * Alongside the pairing pipe above, this process also answers a second,
+ * unrelated kind of request: PUT and GET on an opaque encrypted blob, keyed
+ * by an opaque string. This is what "a central index every device can
+ * reach" (lib/central-index.js) is stored in — every device with the same
+ * shared passphrase can find the same key, and every blob is ciphertext this
+ * process never has the key to open. That does mean this process now keeps
+ * something on disk after all, which the paragraph above used to claim it
+ * never would. It is a deliberate, narrow exception: a handful of small
+ * files, one per device that has ever published, nothing that grows
+ * unboundedly, and still nothing this process can read. Access control is
+ * the same as a pairing room's: nothing here checks who is asking, because
+ * a storage key derived from a real passphrase is not something a stranger
+ * can guess, the same way a room id derived from a pairing code is not.
  */
 
+const fs = require('fs');
+const path = require('path');
 const net = require('net');
 const { FrameReader, encodeFrame } = require('../lib/frames.js');
 
@@ -55,9 +73,58 @@ const ROOM_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 const MAX_ROOMS = 500;
 
-function createRelay({ log = console.log } = {}) {
+/** A storage key is opaque to us too — same shape as a room id, different namespace. */
+const STORE_KEY_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+
+/** Generous for a compressed, encrypted index of even a very large library. */
+const MAX_BLOB_BYTES = 8 * 1024 * 1024;
+
+/** Bounds total disk use from a relay shared by more than one household. */
+const MAX_STORE_KEYS = 2000;
+
+function createRelay({ log = console.log, storeDir = path.join(__dirname, 'store') } = {}) {
   /** room id -> { host, client } */
   const rooms = new Map();
+
+  /** Safe by construction: every key is validated against STORE_KEY_PATTERN
+   * before it is ever used to build a path, so this is never anything but
+   * "<storeDir>/<the validated key>.blob". */
+  function blobPath(key) {
+    return path.join(storeDir, `${key}.blob`);
+  }
+
+  function countStoredKeys() {
+    try {
+      return fs.readdirSync(storeDir).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  function putBlob(key, blob) {
+    if (blob.length > MAX_BLOB_BYTES) return { ok: false, error: 'blob is too large' };
+    const already = fs.existsSync(blobPath(key));
+    if (!already && countStoredKeys() >= MAX_STORE_KEYS) {
+      return { ok: false, error: 'relay storage is full' };
+    }
+    fs.mkdirSync(storeDir, { recursive: true });
+    // Written beside and renamed, so a publish that dies mid-write never
+    // leaves a half blob where a device expects a whole one.
+    const tmp = `${blobPath(key)}.part-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmp, blob);
+    fs.renameSync(tmp, blobPath(key));
+    return { ok: true };
+  }
+
+  function getBlob(key) {
+    try {
+      const blob = fs.readFileSync(blobPath(key));
+      const storedAt = fs.statSync(blobPath(key)).mtime.toISOString();
+      return { ok: true, blob: blob.toString('base64'), storedAt };
+    } catch {
+      return { ok: true, blob: null };
+    }
+  }
 
   /**
    * Say no and hang up.
@@ -127,6 +194,29 @@ function createRelay({ log = console.log } = {}) {
           hello = JSON.parse(frame.toString('utf8'));
         } catch {
           socket.destroy();
+          return;
+        }
+
+        // A store request is one-shot and unrelated to pairing: answered
+        // and closed here, never touching `rooms` at all.
+        if (hello.type === 'store') {
+          if (!STORE_KEY_PATTERN.test(hello.key || '') || !['put', 'get'].includes(hello.action)) {
+            refuse(socket, 'bad hello');
+            return;
+          }
+          // Buffer.from(str, 'base64') never throws — invalid characters are
+          // simply skipped, not rejected — so there is no decode error to
+          // catch here. That is fine: the content is opaque ciphertext to
+          // this process either way, and a caller who sends nonsense only
+          // ever wastes its own storage slot, never anyone else's.
+          const result = hello.action === 'get'
+            ? getBlob(hello.key)
+            : putBlob(hello.key, Buffer.from(hello.blob || '', 'base64'));
+          try {
+            socket.end(encodeFrame(JSON.stringify(result)));
+          } catch {
+            socket.destroy();
+          }
           return;
         }
 
@@ -212,8 +302,10 @@ function createRelay({ log = console.log } = {}) {
 if (require.main === module) {
   const portArg = process.argv.indexOf('--port');
   const port = portArg > -1 ? Number(process.argv[portArg + 1]) : DEFAULT_PORT;
+  const storeDirArg = process.argv.indexOf('--store-dir');
+  const storeDir = storeDirArg > -1 ? process.argv[storeDirArg + 1] : undefined;
 
-  const relay = createRelay();
+  const relay = createRelay(storeDir ? { storeDir } : {});
   relay.listen(port).catch((err) => {
     console.error(`Could not start the relay: ${err.message}`);
     process.exit(1);
@@ -224,4 +316,6 @@ if (require.main === module) {
   }
 }
 
-module.exports = { createRelay, DEFAULT_PORT, LONELY_MS, MAX_ROOMS };
+module.exports = {
+  createRelay, DEFAULT_PORT, LONELY_MS, MAX_ROOMS, STORE_KEY_PATTERN, MAX_BLOB_BYTES, MAX_STORE_KEYS,
+};
