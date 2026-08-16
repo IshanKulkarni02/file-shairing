@@ -106,6 +106,10 @@
       <rect x="4" y="10.5" width="16" height="10.5" rx="2.5"/>
       <path d="M7.75 10.5V7a4.25 4.25 0 0 1 8.1-1.8"/>
     </g>
+    <g id="i-search" fill="none" stroke="currentColor" stroke-width="2.25"
+       stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
+    </g>
   </defs>
 </svg>
 
@@ -116,6 +120,17 @@
         <svg class="icon" viewBox="0 0 24 24"><use href="#i-image"/></svg>
       </span>
       <span class="brand__text">LANShare</span>
+    </div>
+
+    <div class="topbar__search">
+      <svg class="icon topbar__search-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-search"/></svg>
+      <label class="sr-only" for="searchInput">Search your library</label>
+      <input class="topbar__search-input" id="searchInput" type="search"
+             placeholder="Search your library" autocomplete="off">
+      <button class="topbar__search-clear" id="searchClearBtn" type="button"
+              aria-label="Clear search" hidden>
+        <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
+      </button>
     </div>
 
     <div class="topbar__actions">
@@ -191,7 +206,7 @@
 
   <section id="mediaSection" hidden>
     <h2 class="section-title">
-      Photos &amp; videos <span class="section-title__count" id="mediaCount"></span>
+      <span id="mediaHeading">Photos &amp; videos</span> <span class="section-title__count" id="mediaCount"></span>
     </h2>
     <div class="mosaic" id="mosaic"></div>
   </section>
@@ -200,8 +215,8 @@
     <div class="empty__blob" aria-hidden="true">
       <svg class="icon" viewBox="0 0 24 24"><use href="#i-image"/></svg>
     </div>
-    <h2>Nothing here yet</h2>
-    <p>Add photos and videos from this device, or from your phone by opening
+    <h2 id="emptyTitle">Nothing here yet</h2>
+    <p id="emptyNote">Add photos and videos from this device, or from your phone by opening
        this same address there.</p>
     <button class="btn btn--primary" id="emptyUploadBtn">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-upload"/></svg>

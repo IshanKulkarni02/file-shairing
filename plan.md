@@ -24,7 +24,7 @@ the internet without port forwarding.
 | E | macOS and Linux | **Code done**, unverified on real hardware |
 | F | Client mode — connect to other hosts | **Done** |
 | G | P2P over the internet | **Done** (relay; hole punching not attempted) |
-| H | Metadata and search — the foundation | Not started |
+| H | Metadata and search — the foundation | **Done** |
 | I | Search across every machine | Not started |
 | J | A central index every device can reach | Not started |
 | K | Import on connect — cameras, drones, cards | Not started |
@@ -836,8 +836,21 @@ day it lands.
 
 A SQLite index per host holding, for every file: path, size, mtime, content
 hash, and extracted metadata — EXIF camera make and model, capture time, GPS,
-dimensions, duration. Maintained incrementally by watching the library, not by
-rescanning it.
+dimensions, duration. A scan compares size and mtime against what is already
+indexed and only re-reads what changed, so a repeat scan of a mostly-unchanged
+library costs almost nothing — run at startup and on demand, not via a live
+filesystem watcher.
+
+**Built:** `lib/metadata.js` (a dependency-free EXIF/TIFF parser — no library
+was trusted with untrusted camera input), `lib/index-db.js` (the SQLite index,
+FTS5 text search, structured and GPS-radius filters), `lib/indexer.js` (the
+incremental, vault-aware scan), and `GET /api/search` — every result filtered
+through `permissions.isWithinRoots()` and live vault-lock state before it
+leaves the server, the same boundary this project has gotten wrong before.
+A search box in the web gallery reuses the existing tile/viewer UI for
+results, routes anything encrypted or non-previewable to its actual album
+instead of a broken frame, and never touches `state.path` — clearing a search
+just returns to wherever browsing was left off.
 
 **Why EXIF is the whole game.** "Drone shots go in the drone folder" is not a
 judgement call — a DJI stamps its model into every file. So does your camera,
