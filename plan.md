@@ -26,7 +26,7 @@ the internet without port forwarding.
 | G | P2P over the internet | **Done** (relay; hole punching not attempted) |
 | H | Metadata and search — the foundation | **Done** |
 | I | Search across every machine | **Done** (see note below — one gap left open on purpose) |
-| J | A central index every device can reach | Not started |
+| J | A central index every device can reach | **Done** (relay-backed; GitHub not built, see note) |
 | K | Import on connect — cameras, drones, cards | Not started |
 | L | Sorting rules, versioned in git | Not started |
 | M | Instructions in plain language | Not started |
@@ -950,6 +950,67 @@ schedule. It needs doing deliberately.
 holds nothing readable, and has no history to bloat. If one is being run for
 internet access anyway, this is strictly better. Not either/or — same format,
 different shelf.
+
+**Built: the relay, not GitHub — chosen, not defaulted to.** GitHub needs a
+private repo and a personal access token created and handed over before a
+single line of the integration could even be tested; the relay needs neither
+— it is infrastructure this project already runs (Phase G), and building
+against it meant every piece of this phase could be built *and proven* end to
+end without waiting on anyone. The trade is real and worth stating: the
+GitHub route has no server for you to run, while the relay one does. If a
+relay is already up for internet access anyway, this costs nothing extra;
+starting one solely for this is the actual price of the choice.
+
+The format was kept deliberately transport-agnostic (`lib/central-index.js`
+knows nothing about relays) specifically so GitHub remains addable later as a
+second backend without redoing the crypto or the blob shape — same index,
+different shelf, exactly as sketched above.
+
+`relay/server.js` gained a second, unrelated capability alongside its pairing
+pipe: PUT/GET on an opaque encrypted blob, keyed by an opaque string, capped
+in size and count, persisted to a handful of small files. This is the one
+deliberate exception to "no state on disk" anywhere in this relay — narrow
+and documented in the file itself, not a quiet contradiction. **Anyone
+already running a relay for Phase G needs to redeploy it for this to work**
+— the protocol addition does nothing until the running process is updated.
+
+Two keys come from one shared passphrase (`lib/central-index.js`), typed into
+every device the same way a vault passphrase is: an encryption key for the
+blob (AES-256-GCM, `lib/crypto/vault.js`'s wrap/unwrap, unchanged) and a
+separate lookup key that HMACs into where each device publishes. Both use a
+fixed, public, purpose-specific salt rather than a random one — deliberately,
+since a random salt needs somewhere to be stored, and the entire problem this
+phase solves is several devices agreeing on where to look with no shared
+state beyond the passphrase itself typed into each of them.
+
+Each device publishes its whole local index to its **own** storage slot
+(`deviceSlotKey`), not into one blob every device edits — exactly the "one
+index file per device so churn is isolated" mitigation sketched above,
+which also means two devices publishing around the same time never race each
+other's writes. A small shared "roster" blob lists which device slots
+currently exist, refreshed on every publish; losing that specific race only
+leaves a roster entry briefly stale until its owner's next publish, never
+loses index data. `GET /api/search` folds this in for a local admin exactly
+as it already does live peers (Phase I) — merged by content hash into the
+same `locations[]`, always labelled `reachable: false` with when that device
+last published, since a central-index entry is a record of what a device
+said once, never a live connection. Proven end to end in
+`test/central-index-routes.mjs` by publishing from two servers, killing both
+completely, and confirming a third — sharing nothing with either but the
+passphrase — still finds both of their files. That is the property Phase I's
+live federation cannot offer on its own: a dead peer contributes nothing
+until it answers a search itself again, but a device that published once
+needs never be reachable again for its files to keep surfacing.
+
+**Known costs of this v1, stated rather than discovered later:** the central
+index is fetched fresh on every admin search (a roster read plus one read per
+device, in parallel, each on its own short timeout) rather than cached the
+way Phase I caches a peer's live results — a real, accepted latency cost
+under a relay that is slow or far away, not a correctness problem, and the
+same caching approach Phase I already uses could be added here later without
+changing the format. Text matching against a central-index entry is a plain
+substring check, not FTS5's tokenized prefix match the local index gets —
+simpler, and correct for the common case, not identical.
 
 ## K — Import on connect
 
