@@ -113,6 +113,25 @@ contextBridge.exposeInMainWorld('lanshare', {
     update: (patch) => invoke('settings:update', patch),
   },
 
+  capture: {
+    pending: () => invoke('capture:pending'),
+    importNow: () => invoke('capture:importNow'),
+    dismiss: () => invoke('capture:dismiss'),
+    never: () => invoke('capture:never'),
+    /** Fires the moment a capture device is recognised. */
+    onDetected: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('capture-detected', listener);
+      return () => ipcRenderer.removeListener('capture-detected', listener);
+    },
+    /** Fires while an accepted import is copying. */
+    onProgress: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('capture-progress', listener);
+      return () => ipcRenderer.removeListener('capture-progress', listener);
+    },
+  },
+
   /** Fires after anything that could have changed the status view. */
   onStatusChanged: (callback) => {
     const listener = () => callback();

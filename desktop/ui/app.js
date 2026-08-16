@@ -1547,6 +1547,100 @@ window.lanshare.sync.onChanged(({ running }) => {
 });
 
 // ---------------------------------------------------------------------------
+// Importing from a camera, drone or card (Phase K)
+// ---------------------------------------------------------------------------
+
+const CAPTURE_COUNTDOWN_SECONDS = 30;
+let captureCountdownTimer = null;
+let captureCountdownDeadline = 0;
+
+function stopCaptureCountdown() {
+  if (captureCountdownTimer) clearInterval(captureCountdownTimer);
+  captureCountdownTimer = null;
+}
+
+function showCaptureState(which) {
+  $('capturePrompt').hidden = which !== 'prompt';
+  $('captureProgress').hidden = which !== 'progress';
+  $('captureDone').hidden = which !== 'done';
+}
+
+function renderCapturePrompt(detected) {
+  stopCaptureCountdown();
+  $('captureOverlay').hidden = false;
+  showCaptureState('prompt');
+
+  const already = detected.alreadyImported
+    ? ` (${detected.alreadyImported} already imported, skipped)`
+    : '';
+  $('captureSummary').textContent = `"${detected.label}" — ${detected.fileCount} new `
+    + `file${detected.fileCount === 1 ? '' : 's'}, ${formatBytes(detected.totalBytes)}${already}`;
+
+  captureCountdownDeadline = Date.now() + CAPTURE_COUNTDOWN_SECONDS * 1000;
+  const tick = () => {
+    const remaining = Math.max(0, Math.ceil((captureCountdownDeadline - Date.now()) / 1000));
+    $('captureCountdown').textContent = remaining > 0
+      ? `Starting automatically in ${remaining}s…`
+      : 'Starting…';
+    if (remaining <= 0) { stopCaptureCountdown(); runCaptureImport(); }
+  };
+  tick();
+  captureCountdownTimer = setInterval(tick, 250);
+}
+
+async function runCaptureImport() {
+  stopCaptureCountdown();
+  showCaptureState('progress');
+  $('captureProgressNote').textContent = 'Copying…';
+  try {
+    const result = await window.lanshare.capture.importNow();
+    if (!result.ok) {
+      $('captureProgressNote').textContent = result.error;
+      return;
+    }
+    showCaptureState('done');
+    const failedNote = result.failed?.length ? ` (${result.failed.length} could not be copied)` : '';
+    $('captureDoneNote').textContent = `Imported ${result.copied} `
+      + `file${result.copied === 1 ? '' : 's'} into "${result.destDir}"${failedNote}.`;
+  } catch (err) {
+    showCaptureState('progress');
+    $('captureProgressNote').textContent = err.message;
+  }
+}
+
+$('captureImportBtn').addEventListener('click', () => runCaptureImport());
+
+$('captureCancelBtn').addEventListener('click', async () => {
+  stopCaptureCountdown();
+  await window.lanshare.capture.dismiss();
+  $('captureOverlay').hidden = true;
+});
+
+$('captureNeverBtn').addEventListener('click', async () => {
+  stopCaptureCountdown();
+  await window.lanshare.capture.never();
+  $('captureOverlay').hidden = true;
+});
+
+$('captureCloseBtn').addEventListener('click', () => { $('captureOverlay').hidden = true; });
+
+window.lanshare.capture.onDetected((detected) => renderCapturePrompt(detected));
+
+window.lanshare.capture.onProgress(({ done, total }) => {
+  if (!$('captureProgress').hidden) $('captureProgressNote').textContent = `Copying ${done} of ${total}…`;
+});
+
+// A detection whose push event fired into a window that did not exist yet
+// (showWindow() creates one, but loading it is not instant) would otherwise
+// never be shown. Checking once here, after this script has actually
+// loaded, is the fallback — main.js keeps the pending detection in memory
+// until it is acted on, so nothing is lost, only possibly shown a moment
+// later than the push event would have.
+window.lanshare.capture.pending().then((detected) => {
+  if (detected) renderCapturePrompt(detected);
+});
+
+// ---------------------------------------------------------------------------
 // First-run setup
 // ---------------------------------------------------------------------------
 

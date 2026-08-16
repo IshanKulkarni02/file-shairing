@@ -76,6 +76,37 @@
   </div>
 </div>
 
+<!-- Shown the moment a camera, drone or card is recognised. Never taller
+     than the window, same reasoning as the setup wizard above it. -->
+<div class="setup" id="captureOverlay" hidden>
+  <div class="setup__card" style="max-width:420px">
+    <h1 style="margin:0 0 .2rem">New capture device</h1>
+    <p class="panel__sub" id="captureSummary" style="margin:0 0 1rem"></p>
+
+    <div id="capturePrompt">
+      <p class="panel__sub" id="captureCountdown" style="font-weight:600;margin:0 0 1.25rem"></p>
+      <div class="setup__footer" style="display:flex;flex-direction:column;gap:.6rem">
+        <button class="btn btn--primary btn--full" id="captureImportBtn">Import now</button>
+        <div style="display:flex;gap:.6rem">
+          <button class="btn" id="captureCancelBtn" style="flex:1">Cancel</button>
+          <button class="btn" id="captureNeverBtn" style="flex:1">Never for this card</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="captureProgress" hidden>
+      <p class="panel__sub" id="captureProgressNote"></p>
+    </div>
+
+    <div id="captureDone" hidden>
+      <p class="panel__sub" id="captureDoneNote" style="margin:0 0 1rem"></p>
+      <div class="setup__footer">
+        <button class="btn btn--primary btn--full" id="captureCloseBtn">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <nav class="nav">
   <div class="nav__brand">
     <img src="icon.png" alt="">

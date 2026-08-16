@@ -27,7 +27,7 @@ the internet without port forwarding.
 | H | Metadata and search — the foundation | **Done** |
 | I | Search across every machine | **Done** (see note below — one gap left open on purpose) |
 | J | A central index every device can reach | **Done** (relay-backed; GitHub not built, see note) |
-| K | Import on connect — cameras, drones, cards | Not started |
+| K | Import on connect — cameras, drones, cards | **Done** |
 | L | Sorting rules, versioned in git | Not started |
 | M | Instructions in plain language | Not started |
 | N | Content search — the fuzzy cases | Not started |
@@ -1027,6 +1027,46 @@ after they can see the files arrived.
 What has already been imported is remembered by content hash, so re-inserting
 the same card picks up only what is new. Free space is checked before starting
 rather than failing at 80%.
+
+**Built:** `lib/import.js` does the mechanics — plan (read-only: hash
+everything on the card, ask the library's own index whether it already has
+each hash — exactly what Phase H's duplicate detection was for) and run
+(copy beside the real name, re-hash the copy, only then rename it into
+place; a mismatch is failed loudly, not backed up silently wrong). Free
+space is checked once against the plan's total before the first byte is
+written. Nothing here ever opens a source file for writing, renames
+anything on the card, or deletes from it — there is no code path that
+could, not just a rule that says not to. `lib/capture-device.js` is the
+policy in front of it: a volume is only ever offered if it is not already
+this install's own library or a relocated album's drive, and "never for
+this card" is remembered by the same stable volume id Phase C already uses,
+so it survives a replug. `lib/capture-watcher.js` polls for arrivals the
+same way `lib/sync-watcher.js` already does for a configured sync target,
+just applied to *any* unrecognised volume instead of only a configured one.
+
+The prompt itself reuses the desktop app's existing single-window
+architecture rather than a second `BrowserWindow` — Electron's
+`dialog.showMessageBox` cannot auto-trigger after a countdown, so the
+existing "cover" pattern the first-run wizard already uses (a full-window
+overlay, shown and hidden with the same `hidden` toggle) carries this too.
+Detected while the window is hidden in the tray, the window is brought to
+front — the same `showWindow()` the tray's own "Open" already calls — so
+the prompt is never silently waiting behind a hidden window.
+
+**Where imports land, until L exists to decide better:** a predictable
+`/Imports/<device label>` album, created if needed. That is a deliberate
+placeholder, not a guess at what L's rules will look like — the destination
+is resolved in exactly one place (`importDestination()` in
+`desktop/main.js`), which is the seam L replaces, not a scheme threaded
+through the rest of this phase.
+
+**A real limitation, stated rather than glossed over:** the device "label"
+in "Import 240 files from DJI Mini 4 Pro" is aspirational — there is no
+reliable, cross-manufacturer way to ask a mounted volume for a real
+make/model string, so what is actually shown is the volume's own label
+(often a generic "NO NAME" or whatever the camera's firmware happened to
+set, occasionally something legible like "DJI_MINI4"). Honest given what a
+FAT32 volume actually exposes, not what the mockup implies.
 
 ## L — Sorting rules, versioned in git
 
