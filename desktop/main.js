@@ -55,12 +55,23 @@ const connections = require('../lib/connections');
 const tunnel = require('../lib/tunnel');
 const paths = require('../lib/paths');
 const firewall = require('../lib/firewall');
+const volumesLib = require('../lib/volumes');
+const captureDeviceLib = require('../lib/capture-device');
+const captureWatcherLib = require('../lib/capture-watcher');
+const importLib = require('../lib/import');
+const indexerLib = require('../lib/indexer');
 
 const { config, generated } = configLib.loadOrCreate();
 
 let mainWindow = null;
 let tray = null;
 let serverHandle = null;
+let captureWatcher = null;
+// The one detected-but-undecided capture device, if any. A second card
+// arriving while this one is still waiting simply replaces it — showing two
+// overlapping prompts is more confusing than asking about the newer one
+// first and letting the person replug the first card if it still matters.
+let pendingCapture = null;
 // Distinguishes "the user chose Quit" from "the window's close button was
 // clicked" — the latter should respect the close-to-tray setting instead of
 // always exiting.
@@ -96,11 +107,36 @@ async function startServerImpl() {
       }
     };
   }
+
+  captureWatcher = new captureWatcherLib.CaptureWatcher({
+    getConfig: () => config,
+    getIndexDb: () => serverHandle?.indexDb || null,
+    getLibraryVolumeId: () => volumesLib.identify(libraryPath())?.id || null,
+    onDetected: ({ volume, plan }) => {
+      // A second card arriving before the first was decided replaces it —
+      // see the note on the pendingCapture declaration above.
+      pendingCapture = { volume, plan };
+      showWindow();
+      mainWindow?.webContents.send('capture-detected', {
+        volumeId: volume.id,
+        label: volume.label,
+        fileCount: plan.candidates.length,
+        totalBytes: plan.totalBytes,
+        alreadyImported: plan.alreadyImported,
+      });
+    },
+    log: (message) => console.log(`[capture] ${message}`),
+  });
+  captureWatcher.start();
+
   return serverHandle;
 }
 
 async function stopServerImpl() {
   if (!serverHandle) return;
+  captureWatcher?.stop();
+  captureWatcher = null;
+  pendingCapture = null;
   await serverHandle.stop();
   serverHandle = null;
 }
@@ -325,7 +361,8 @@ function guarded(fn) {
         || err instanceof vaults.VaultStateError
         || err instanceof locations.LocationError
         || err instanceof syncTargets.SyncTargetError
-        || err instanceof syncEngine.SyncError) {
+        || err instanceof syncEngine.SyncError
+        || err instanceof importLib.ImportError) {
         return { ok: false, error: err.message };
       }
       throw err;
@@ -575,6 +612,66 @@ function throttledProgress(id) {
     }
   };
 }
+
+// --- importing from a camera, drone or card (Phase K) -----------------------
+
+/**
+ * Where an import lands. Phase L's sorting rules do not exist yet, so this
+ * is a predictable, honest default rather than an attempt to guess a
+ * destination cleverly — a device label under a top-level "Imports" album,
+ * created if it does not already exist. The seam for L to override this
+ * later is here, not spread across the IPC handler below.
+ */
+function importDestination(label) {
+  const safe = paths.safeName(label || 'Device');
+  return path.join(libraryPath(), 'Imports', safe);
+}
+
+ipcMain.handle('capture:pending', () => (pendingCapture ? {
+  volumeId: pendingCapture.volume.id,
+  label: pendingCapture.volume.label,
+  fileCount: pendingCapture.plan.candidates.length,
+  totalBytes: pendingCapture.plan.totalBytes,
+  alreadyImported: pendingCapture.plan.alreadyImported,
+} : null));
+
+ipcMain.handle('capture:importNow', guarded(async () => {
+  if (!pendingCapture) throw new importLib.ImportError('There is nothing waiting to be imported');
+  const { volume, plan } = pendingCapture;
+  pendingCapture = null;
+
+  const destDir = importDestination(volume.label);
+  const result = await importLib.runImport({
+    plan,
+    destDir,
+    onProgress: (progress) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('capture-progress', { volumeId: volume.id, ...progress });
+      }
+    },
+  });
+
+  // The library's index has no idea any of this happened until its next
+  // scan — kicked off here rather than left to whatever the next scheduled
+  // scan happens to be, so the newly-imported files are actually findable
+  // by search right away, and so a re-inserted card correctly sees them as
+  // already-imported next time.
+  if (serverHandle?.indexDb) {
+    indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb).catch((err) => {
+      console.warn(`[capture] post-import scan failed: ${err.message}`);
+    });
+  }
+
+  return { destDir, copied: result.copied.length, failed: result.failed };
+}));
+
+ipcMain.handle('capture:dismiss', () => { pendingCapture = null; return {}; });
+
+ipcMain.handle('capture:never', () => {
+  if (pendingCapture) captureDeviceLib.dismiss(config, configLib, pendingCapture.volume.id);
+  pendingCapture = null;
+  return {};
+});
 
 // --- other machines --------------------------------------------------------
 
