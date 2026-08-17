@@ -246,6 +246,47 @@ try {
   const statusBody = await res.json();
   check('admin can read index status', res.status === 200 && typeof statusBody.count === 'number',
     JSON.stringify(statusBody));
+
+  // --- content search (Phase N) — route shape and gating only ----------------
+  // No real model is loaded here: the point of this section is the HTTP
+  // plumbing and the security-relevant gating, not CLIP's own correctness
+  // (test/clip.mjs) or the ranking logic (test/index-db.mjs, with synthetic
+  // vectors) or the build orchestration (test/content-index.mjs, with an
+  // injected embedder) — each already proven at the layer that owns it.
+  // Never calling POST /api/content-index/build here also means this stays
+  // fast and network-independent, same boundary test/sort-rules-routes.mjs
+  // draws around Ollama, just for a different underlying reason: not "no
+  // model is running here" but "downloading one is this suite's job to
+  // avoid, not this test's job to force".
+
+  res = await scoped('/api/content-index/build', { method: 'POST' });
+  check('a viewer cannot trigger a content-index build', res.status === 403, `got ${res.status}`);
+
+  res = await scoped('/api/content-index/status');
+  check('a viewer cannot read content-index status', res.status === 403, `got ${res.status}`);
+
+  res = await admin('/api/content-index/status');
+  const contentStatusBody = await res.json();
+  check('admin can read content-index status, shaped as expected',
+    res.status === 200
+    && typeof contentStatusBody.embedded === 'number'
+    && typeof contentStatusBody.embeddable === 'number'
+    && typeof contentStatusBody.building === 'boolean'
+    && typeof contentStatusBody.modelCached === 'boolean',
+    JSON.stringify(contentStatusBody));
+
+  res = await scoped('/api/search/content?q=whiteboards');
+  check('content search itself is available to a viewer-level account (not admin-gated)',
+    res.status === 200, `got ${res.status}`);
+
+  res = await admin('/api/search/content?q=');
+  check('a blank content-search query is refused with a 400', res.status === 400, `got ${res.status}`);
+
+  res = await admin('/api/search/content?q=whiteboards');
+  body = await res.json();
+  check('before anything has ever been embedded, content search reports unavailable rather than erroring',
+    res.status === 200 && body.available === false && Array.isArray(body.results) && body.results.length === 0,
+    JSON.stringify(body));
 } catch (err) {
   fail++;
   console.log(`  FAIL  unexpected error during the test run -> ${err.stack || err.message}`);

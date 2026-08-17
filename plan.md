@@ -30,7 +30,7 @@ the internet without port forwarding.
 | K | Import on connect — cameras, drones, cards | **Done** |
 | L | Sorting rules, versioned in git | **Done** |
 | M | Instructions in plain language | **Done** (grammar/plumbing tested; real-model quality unverified here) |
-| N | Content search — the fuzzy cases | Not started |
+| N | Content search — the fuzzy cases | **Done** (CPU-verified end to end; GPU and packaged-install unverified here) |
 
 Phases A–G made one machine's library good and let machines reach each other.
 H–N are a different goal: **one searchable space across every device and
@@ -1235,6 +1235,123 @@ For what metadata cannot answer: "photos of whiteboards", "the one with the red
 bike". CLIP embeddings computed locally, roughly 1–2 GB of model, comfortable on
 this GPU. Optional, and last, because metadata answers most questions first and
 answers them exactly.
+
+**Built:** `lib/clip.js` runs CLIP (`Xenova/clip-vit-base-patch32`) entirely
+in-process via `@huggingface/transformers` (formerly Xenova/transformers.js),
+which executes the real ONNX graph through `onnxruntime-node` — no Python, no
+separate server to keep running, no account. That is the same fit-the-stack
+reasoning `lib/index-db.js` already used to pick Node's built-in `node:sqlite`
+over `better-sqlite3`, and that ffmpeg already gets as a vendored binary
+rather than an npm wrapper: one more native dependency alongside sharp (the
+one this app already carries), not a new category of one. Confirmed by an
+actual spike before any of this was built, not assumed: the model downloads
+from Hugging Face and runs real inference in this environment, correctly
+discriminating a solid red image from a solid blue one against "a photo of
+the color red" / "...blue" text queries. The real, measured footprint is the
+~9 MB package plus a ~580 MB one-time model download (the vision and text
+towers only) — smaller than the naive first measurement of 1.15 GB, which
+turned out to include a redundant, unused merged-graph export pulled in by
+an early, wrong API call (the generic `pipeline()` wrapper) rather than the
+two specific tower classes `lib/clip.js` actually calls
+(`CLIPTextModelWithProjection` / `CLIPVisionModelWithProjection`). An `fp16`
+dtype override was tried first to halve that download further and rejected:
+it makes `onnxruntime-node`'s CPU execution provider throw during graph
+initialization on this model's text tower (a layer-norm fusion pass reaching
+for a constant quantization had already folded away) — a real failure caught
+by testing against the real model, not a hypothetical. The model cache lives
+under `lib/config.js`'s `serverStateDir()` (`.lanshare-server/model-cache`),
+never inside `node_modules`, for the same reason config and sessions already
+live there: that path is read-only and versioned away on every upgrade once
+this app is packaged.
+
+`lib/index-db.js` gained a `content_embeddings` table keyed by
+**(content hash, model)**, not path — the same "one entry per hash" identity
+`lib/federation.js`'s merge-by-hash and `lib/import.js`'s dedup already use,
+so two copies of one photo in different albums are embedded, and pay CLIP's
+per-image cost, exactly once. Ranking is a brute-force dot product over every
+stored (pre-normalized) vector for the query's model — no approximate-
+nearest-neighbour index — because a personal library is thousands of photos,
+not millions, and a linear scan at that size is comfortably sub-second
+without a second index to keep consistent or another native dependency to
+carry. `lib/content-index.js` is the background builder: it reuses
+`lib/thumbs.js`'s existing grid thumbnail (already a decoded, uniform 480×480
+image for both photos and videos — a poster frame for the latter, via
+ffmpeg) as CLIP's input rather than re-implementing decoding a second time,
+and never touches vault content, for the identical reason
+`lib/indexer.js` never opens it for metadata: `hashesNeedingEmbedding()`
+excludes encrypted rows at the query itself, so this module never has to
+know a vault is even involved. A real, deliberately-caught bug here: the
+first version looped forever on a permanently-failing file, because nothing
+ever left it in `hashesNeedingEmbedding()`'s result set once it had failed;
+fixed by tracking attempted hashes for the life of one call, so a bad file
+is tried exactly once per build, not retried in an infinite loop — a later,
+separate build attempt still retries it fresh, same "a cached failure cannot
+self-correct" reasoning `lib/geocode.js` already applies to its own lookups.
+
+Reachable via `GET /api/search/content` — open to any role and root-scoped
+exactly like `GET /api/search` (the two now share one `visibleRow()` helper
+rather than two copies of the same security-relevant filter that could
+drift) — and two admin-only routes, `POST /api/content-index/build` and
+`GET /api/content-index/status`, mirroring `/api/index/rebuild` and
+`/api/index/status`'s own split between "an ordinary search anyone can run"
+and "an administrative action that reindexes." There is no separate
+enabled/disabled setting: the presence of at least one embedding *is* the
+opt-in, exposed to every role via a `contentSearchAvailable` flag on
+`/api/me`, so a viewer's gallery can decide whether to offer content search
+at all without an admin-gated round trip first. Building the index is never
+triggered automatically — not at startup, not after an upload, not after a
+sort — unlike the metadata scan; it is a genuinely optional, admin-clicked
+action in the web gallery (a "Content search" toolbar button, next to
+Central index, following the same one-time-setup convention), because the
+first click pays a real, one-time cost (the model download) nobody should
+absorb without asking for it.
+
+The web gallery gained a search-mode toggle (a sparkle icon inside the
+search box, hidden entirely until `contentSearchAvailable`) that switches
+`GET /api/search` for `GET /api/search/content` and relabels the empty/
+heading text accordingly. **A real bug only surfaced by testing this in an
+actual browser, not by any route test:** content-search results carry the
+one order that means anything for them — ranked by similarity — and the
+gallery's ordinary newest/oldest/name/largest picker was silently
+re-sorting them by upload time regardless, so a "red car" query could put
+its best match last for no reason a person could see. Route-level tests
+never touch client-side sorting and would never have caught this; it took
+actually uploading two real photos, running a real build, and reading the
+rendered grid to notice the ranking had been thrown away. Fixed by skipping
+the sort picker specifically in content-search mode (and hiding the now-
+meaningless picker itself, rather than leaving a control that quietly does
+nothing).
+
+**Testing split three ways, matching what each layer actually owns:**
+`test/clip.mjs` runs against the *real* model — unlike Phase M's Ollama
+dependency, CLIP needs no external server this app doesn't itself run, only
+a one-time download this environment was confirmed able to make, so there is
+no honest reason to fake it here. `test/index-db.mjs`'s embedding tests use
+hand-built synthetic vectors, proving the storage and ranking SQL without
+paying a model's load cost on every run. `test/content-index.mjs` injects a
+fake `embedImageFile`, proving the orchestration (what gets embedded, that a
+second run is a no-op, that one bad file cannot wedge the batch) independent
+of whether CLIP itself is any good. Route coverage is split the same way:
+`test/search-routes.mjs` covers gating and shape without a model,
+`test/content-search-routes.mjs` (registered `slow: true`) pays the real
+cost for one genuine end-to-end proof — a real build, a real ranked result,
+real root-scoping, a vault photo that never appears.
+
+**What is not, and cannot be, verified from this environment:** GPU
+acceleration. Every real run here used `onnxruntime-node`'s CPU execution
+provider; the plan's "comfortable on this GPU" is unverified the same way
+Phase M's RTX 3060 reference already was, and CPU inference is what a
+person without that GPU would actually get, so it is the path this was
+built and tested against, not an afterthought. Also unverified: a full
+`electron-builder` packaged install with these new native dependencies —
+`package.json`'s `asarUnpack` gained entries for `@huggingface/**`,
+`onnxruntime-node`, `onnxruntime-common` and `onnxruntime-web`, following
+the exact glob pattern already proven for sharp's own entry, but a real
+installer was not rebuilt and exercised in this environment. Separately,
+`sharp` was bumped 0.33.5 → 0.34.5 (a peer requirement of
+`@huggingface/transformers`) and verified in isolation, on its own commit,
+before any Phase N code landed on top of it — the full suite passed
+unchanged, including `media.mjs`.
 
 ---
 

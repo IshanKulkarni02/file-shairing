@@ -110,6 +110,12 @@
        stroke-linecap="round" stroke-linejoin="round">
       <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
     </g>
+    <!-- A four-point sparkle: content search, the one query type that isn't
+         matching text against a field but asking a model what a photo shows. -->
+    <g id="i-sparkle" fill="currentColor" stroke="none">
+      <path d="M12 2c.4 3.2 1 5.4 1.8 6.2.8.8 3 1.4 6.2 1.8-3.2.4-5.4 1-6.2 1.8-.8.8-1.4 3-1.8 6.2
+               -.4-3.2-1-5.4-1.8-6.2-.8-.8-3-1.4-6.2-1.8 3.2-.4 5.4-1 6.2-1.8.8-.8 1.4-3 1.8-6.2Z"/>
+    </g>
   </defs>
 </svg>
 
@@ -127,6 +133,10 @@
       <label class="sr-only" for="searchInput">Search your library</label>
       <input class="topbar__search-input" id="searchInput" type="search"
              placeholder="Search your library" autocomplete="off">
+      <button class="topbar__search-mode" id="searchKindBtn" type="button" hidden
+              aria-pressed="false" title="Search by what's in the photo, not just its name">
+        <svg class="icon" viewBox="0 0 24 24"><use href="#i-sparkle"/></svg>
+      </button>
       <button class="topbar__search-clear" id="searchClearBtn" type="button"
               aria-label="Clear search" hidden>
         <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
@@ -168,6 +178,11 @@
     <button class="btn btn--ghost" id="centralIndexBtn" hidden title="Set up or publish to the central index">
       <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-drive"/></svg>
       Central index
+    </button>
+    <button class="btn btn--ghost" id="contentIndexBtn" hidden
+            title="Build or extend the content-search index">
+      <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-sparkle"/></svg>
+      <span id="contentIndexBtnLabel">Content search</span>
     </button>
 
     <div class="toolbar__spacer"></div>

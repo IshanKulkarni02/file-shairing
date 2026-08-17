@@ -257,6 +257,123 @@ try {
     check('search respects an explicit limit', limited.length === 5, limited.length);
     db.close();
   }
+
+  // --- content embeddings (Phase N) --------------------------------------------------
+  // Uses synthetic, hand-built vectors throughout, never the real CLIP model —
+  // proving the real model's embeddings are meaningful is test/clip.mjs's job;
+  // this file's job is proving the storage and ranking built on top of
+  // whatever vectors it is handed are correct.
+
+  const MODEL = 'test-model-v1';
+  function unit(...dims) {
+    // A short, easy-to-reason-about vector, padded to a fixed length and
+    // then actually normalized — not just "looks unit length" by construction.
+    const v = new Float32Array(8);
+    dims.forEach((d, i) => { v[i] = d; });
+    let sumSq = 0;
+    for (const x of v) sumSq += x * x;
+    const norm = Math.sqrt(sumSq) || 1;
+    return v.map((x) => x / norm);
+  }
+
+  {
+    const db = scratchDb();
+    const v = unit(1, 2, 3, 4);
+    db.upsertEmbedding('hash-a', MODEL, v);
+    const back = db.getEmbedding('hash-a', MODEL);
+    check('an embedding round-trips through storage bit-for-bit (within float32 precision)',
+      back.length === v.length && back.every((x, i) => Math.abs(x - v[i]) < 1e-6),
+      JSON.stringify([...back]));
+    check('an embedding under a different model is not found', db.getEmbedding('hash-a', 'other-model') === null);
+    check('an unknown hash is not found', db.getEmbedding('hash-does-not-exist', MODEL) === null);
+    db.close();
+  }
+
+  {
+    const db = scratchDb();
+    const v1 = unit(1, 0, 0);
+    db.upsertEmbedding('hash-a', MODEL, v1);
+    const v2 = unit(0, 1, 0);
+    db.upsertEmbedding('hash-a', MODEL, v2);
+    const back = db.getEmbedding('hash-a', MODEL);
+    check('storing a new embedding for the same hash+model replaces it, not duplicates it',
+      back.every((x, i) => Math.abs(x - v2[i]) < 1e-6));
+    check('and no duplicate row was created', db.countEmbedded(MODEL) === 1, db.countEmbedded(MODEL));
+    db.close();
+  }
+
+  {
+    const db = scratchDb();
+    db.upsert(entry({ relPath: '/a.jpg', hash: 'hash-a' }));
+    db.upsert(entry({ relPath: '/b.jpg', hash: 'hash-b' }));
+    // A duplicate of hash-a under a second path — must count once, not twice.
+    db.upsert(entry({ relPath: '/a-copy.jpg', hash: 'hash-a' }));
+    db.upsert(entry({
+      relPath: '/vault/c.jpg', hash: 'hash-c', encrypted: true,
+    }));
+    db.upsert(entry({ relPath: '/no-hash.jpg', hash: null }));
+
+    check('countEmbeddable counts distinct hashes, excluding encrypted and hash-less files',
+      db.countEmbeddable() === 2, db.countEmbeddable());
+
+    const needing = db.hashesNeedingEmbedding(MODEL);
+    check('hashesNeedingEmbedding lists every embeddable hash before anything is embedded',
+      needing.length === 2 && needing.some((n) => n.hash === 'hash-a') && needing.some((n) => n.hash === 'hash-b'),
+      JSON.stringify(needing));
+    check('a vault file never appears as needing embedding', !needing.some((n) => n.hash === 'hash-c'));
+    // MIN(rel_path) is a plain lexicographic string comparison: '-' (0x2D)
+    // sorts before '.' (0x2E), so between '/a-copy.jpg' and '/a.jpg' the
+    // hyphenated one wins. Asserting the exact value, not just "one of the
+    // two", is what actually proves the choice is deterministic rather than
+    // incidentally stable.
+    const forA = needing.find((n) => n.hash === 'hash-a');
+    check('the representative path for a hash with two copies picks MIN(rel_path) deterministically',
+      forA.relPath === '/a-copy.jpg', forA.relPath);
+
+    db.upsertEmbedding('hash-a', MODEL, unit(1, 0, 0));
+    const stillNeeding = db.hashesNeedingEmbedding(MODEL);
+    check('once embedded, a hash stops appearing in hashesNeedingEmbedding — naturally incremental',
+      stillNeeding.length === 1 && stillNeeding[0].hash === 'hash-b', JSON.stringify(stillNeeding));
+    check('countEmbedded reflects exactly what has been embedded so far', db.countEmbedded(MODEL) === 1);
+
+    db.close();
+  }
+
+  {
+    const db = scratchDb();
+    db.upsert(entry({ relPath: '/cat.jpg', hash: 'hash-cat' }));
+    db.upsert(entry({ relPath: '/dog.jpg', hash: 'hash-dog' }));
+    db.upsert(entry({ relPath: '/car.jpg', hash: 'hash-car' }));
+
+    // Three well-separated directions in a toy embedding space; a query
+    // vector close to one and far from the others should rank accordingly,
+    // exactly as a real CLIP space would for genuinely different content.
+    db.upsertEmbedding('hash-cat', MODEL, unit(1, 0, 0));
+    db.upsertEmbedding('hash-dog', MODEL, unit(0, 1, 0));
+    db.upsertEmbedding('hash-car', MODEL, unit(0, 0, 1));
+
+    const results = db.searchByContent(unit(0.95, 0.05, 0), { model: MODEL });
+    check('the closest vector ranks first', results[0].hash === 'hash-cat', JSON.stringify(results.map((r) => r.hash)));
+    check('every result carries its similarity score', results.every((r) => typeof r._score === 'number'));
+    check('scores are sorted highest first', results[0]._score >= results[1]._score && results[1]._score >= results[2]._score);
+    check('a result under a model nobody embedded anything for comes back empty',
+      db.searchByContent(unit(1, 0, 0), { model: 'nobody-used-this-model' }).length === 0);
+
+    const limited = db.searchByContent(unit(1, 0, 0), { model: MODEL, limit: 1 });
+    check('limit is respected', limited.length === 1);
+    db.close();
+  }
+
+  {
+    const db = scratchDb();
+    db.upsert(entry({ relPath: '/x.jpg', hash: 'hash-x' }));
+    db.upsert(entry({ relPath: '/x-copy.jpg', hash: 'hash-x' }));
+    db.upsertEmbedding('hash-x', MODEL, unit(1, 0, 0));
+    const results = db.searchByContent(unit(1, 0, 0), { model: MODEL });
+    check('a hash shared by two files still yields exactly one search result, not one per path',
+      results.length === 1, results.length);
+    db.close();
+  }
 } catch (err) {
   fail++;
   console.log(`  FAIL  unexpected error -> ${err.stack || err.message}`);

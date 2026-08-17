@@ -295,6 +295,16 @@ img, video { max-width: 100%; display: block; }
   color: var(--text-soft);
 }
 .topbar__search-clear:hover { background: var(--surface-2); color: var(--text); }
+.topbar__search-mode {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px; height: 28px;
+  border-radius: var(--r-pill);
+  color: var(--text-soft);
+}
+.topbar__search-mode:hover { background: var(--surface-2); color: var(--text); }
+.topbar__search-mode[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 
 /* -------------------------------------------------------------------------
    Breadcrumb + toolbar
