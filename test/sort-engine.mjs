@@ -211,5 +211,40 @@ function putFile(library, relPath, content = 'x') {
   }
 }
 
+// --- nothing is written outside the library, whatever apply() is handed ----
+// apply() accepts a person-edited subset of a plan's moves, not only what
+// plan() produced, so containment lives in the one function every read and
+// write here goes through rather than only at the parser. This hands it a
+// move the parser would now never produce, to prove the backstop is real.
+
+{
+  const library = scratchLibrary();
+  const outside = path.join(library, '..', `escaped-by-engine-${Date.now().toString(36)}`);
+  try {
+    mkdirSync(path.join(library, 'Album'), { recursive: true });
+    writeFileSync(path.join(library, 'Album', 'only-copy.jpg'), 'the one and only copy');
+
+    const batch = await engine.apply({
+      library,
+      moves: [{
+        path: '/Album/only-copy.jpg',
+        name: 'only-copy.jpg',
+        destinationAlbum: `/../${path.basename(outside)}`,
+      }],
+    });
+
+    check('a move aimed outside the library is refused, not performed',
+      batch.moved.length === 0 && batch.failed.length === 1, JSON.stringify(batch));
+    check('and the refusal says why',
+      /outside the library/.test(batch.failed[0]?.error || ''), batch.failed[0]?.error);
+    check('nothing was written outside the library', !existsSync(outside));
+    check('and the original file is untouched where it started',
+      readFileSync(path.join(library, 'Album', 'only-copy.jpg'), 'utf8') === 'the one and only copy');
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

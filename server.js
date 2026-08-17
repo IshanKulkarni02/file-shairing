@@ -13,7 +13,18 @@ const ffmpeg = require('./lib/ffmpeg');
 const net = require('./lib/net');
 const serverApp = require('./lib/server-app');
 
-const { config, generated } = configLib.loadOrCreate();
+// Loaded before any error handling further down can help, so a config that
+// cannot be read is reported here as the one-line explanation it is, rather
+// than as an uncaught parse stack trace from inside lib/config.js.
+let config;
+let generated;
+try {
+  ({ config, generated } = configLib.loadOrCreate());
+} catch (err) {
+  console.error(`\n  ${err.message}\n`);
+  process.exit(1);
+}
+
 if (process.env.PORT) config.port = Number(process.env.PORT);
 if (process.env.HTTPS_PORT !== undefined) config.httpsPort = Number(process.env.HTTPS_PORT);
 

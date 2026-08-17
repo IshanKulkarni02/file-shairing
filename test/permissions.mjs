@@ -228,6 +228,103 @@ try {
   });
   check('with a second admin present, disabling one of them is allowed',
     res.status === 200, `got ${res.status}`);
+
+  // --- a password change signs out every device holding the old session -----
+  // The session cookie is signed with the server secret, not the password, so
+  // nothing about changing a password invalidates it on its own. That makes
+  // this the one patch that must revoke explicitly: otherwise "change your
+  // password" is useless as a response to a stolen device or leaked cookie,
+  // which is the single most common reason anyone changes one.
+
+  const pwUser = `pwchange-${RUN}`;
+  res = await createAccount(pwUser, 'viewer', ['/']);
+  check('created an account to test password-change revocation', res.status === 200, `got ${res.status}`);
+
+  const victim = client();
+  await login(victim, pwUser, 'Testpass123');
+  res = await victim('/api/list?path=/');
+  check('that account has a working session before the change', res.status === 200, `got ${res.status}`);
+
+  res = await admin(`/api/accounts/${encodeURIComponent(pwUser)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'Different456' }),
+  });
+  check('admin changes that account\'s password', res.status === 200, `got ${res.status}`);
+
+  res = await victim('/api/list?path=/');
+  check('the already-signed-in device is signed out by the password change',
+    res.status === 401, `got ${res.status}`);
+
+  const rejoined = client();
+  res = await login(rejoined, pwUser, 'Different456');
+  check('and the new password works for a fresh sign-in', res.status === 200, `got ${res.status}`);
+
+  res = await login(client(), pwUser, 'Testpass123');
+  check('while the old password no longer does', res.status === 401, `got ${res.status}`);
+
+  // Changing your *own* password must not sign you out of the session you are
+  // using to change it — every other device, yes; the tab in your hand, no.
+  const selfUser = `pwself-${RUN}`;
+  await createAccount(selfUser, 'manager', ['/']);
+  const selfA = client();
+  const selfB = client();
+  await login(selfA, selfUser, 'Testpass123');
+  await login(selfB, selfUser, 'Testpass123');
+
+  res = await selfA('/api/accounts/' + encodeURIComponent(selfUser), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'SelfChosen789' }),
+  });
+  // A manager cannot PATCH accounts (admin-only), so this specific
+  // self-service path is not reachable for them — assert that honestly
+  // rather than pretending the route allows it.
+  check('a non-admin cannot change any account through the accounts route, including their own',
+    res.status === 403, `got ${res.status}`);
+
+  // The admin doing it to themselves is the reachable version of the same
+  // case: their own current session survives, other devices do not.
+  const adminSecond = client();
+  await login(adminSecond, 'admin', ADMIN_PASSWORD);
+  res = await adminSecond('/api/list?path=/');
+  check('a second admin device is signed in before the self-change', res.status === 200, `got ${res.status}`);
+
+  res = await admin('/api/accounts/admin', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: ADMIN_PASSWORD }),
+  });
+  check('admin re-sets their own password to the same value', res.status === 200, `got ${res.status}`);
+
+  res = await admin('/api/list?path=/');
+  check('the admin session that made the change stays signed in', res.status === 200, `got ${res.status}`);
+
+  res = await adminSecond('/api/list?path=/');
+  check('but the admin\'s other device is signed out', res.status === 401, `got ${res.status}`);
+
+  // --- admin passwords have a higher minimum than lesser roles --------------
+  // Same reasoning the first-run wizard already applies: an admin account can
+  // reach every file and every setting, from every device on the network.
+
+  res = await admin('/api/accounts', json({
+    username: `shortadmin-${RUN}`, password: 'abcd', role: 'admin', roots: ['/'],
+  }));
+  check('a 4-character admin password is refused', res.status === 400, `got ${res.status}`);
+
+  res = await admin('/api/accounts', json({
+    username: `shortviewer-${RUN}`, password: 'abcd', role: 'viewer', roots: ['/'],
+  }));
+  if (res.status === 200) accountsCreated.push(`shortviewer-${RUN}`);
+  check('the same short password is still fine for a viewer', res.status === 200, `got ${res.status}`);
+
+  res = await admin(`/api/accounts/shortviewer-${RUN}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ role: 'admin', password: 'abcd' }),
+  });
+  check('promoting to admin with a short password in the same request is refused',
+    res.status === 400, `got ${res.status}`);
 } catch (err) {
   fail++;
   console.log(`  FAIL  unexpected error during the test run -> ${err.stack || err.message}`);

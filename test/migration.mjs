@@ -105,6 +105,53 @@ try {
     Array.isArray(migratedUser.roots) && migratedUser.roots.includes('/'));
   check('config.json on disk is upgraded to include disabled: false',
     migratedUser.disabled === false);
+
+  // --- a config.json that cannot be parsed is explained, not thrown raw -----
+  // config.json holds the signing secret and every password hash, and is
+  // rewritten on every account change. A process killed mid-write used to
+  // leave a truncated file that took the whole app down with a bare
+  // SyntaxError from module scope, before any error handling existed.
+
+  const brokenHome = mkdtempSync(path.join(tmpdir(), 'lanshare-badconfig-'));
+  try {
+    writeFileSync(path.join(brokenHome, 'config.json'), '{ "users": [ truncated mid-writ');
+
+    const probe = spawn(process.execPath, ['-e', `
+      process.env.LANSHARE_HOME = ${JSON.stringify(brokenHome)};
+      try {
+        require(${JSON.stringify(path.join(repoRoot, 'lib', 'config.js').replace(/\\/g, '/'))}).load();
+        console.log('NO_THROW');
+      } catch (err) {
+        console.log('THREW:' + err.message);
+      }
+    `], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let probeOut = '';
+    probe.stdout.on('data', (c) => { probeOut += c; });
+    probe.stderr.on('data', (c) => { probeOut += c; });
+    await new Promise((resolve) => probe.on('close', resolve));
+
+    check('a corrupt config.json throws rather than being silently replaced by defaults',
+      probeOut.includes('THREW:'), probeOut.slice(0, 300));
+    check('and the message names the file and says what to do about it',
+      probeOut.includes('config.json') && /restore|delete/i.test(probeOut), probeOut.slice(0, 300));
+    check('and it is not a bare JSON parse error with no context',
+      !/^THREW:(Unexpected|Expected)/m.test(probeOut), probeOut.slice(0, 300));
+  } finally {
+    rmSync(brokenHome, { recursive: true, force: true });
+  }
+
+  // --- saving is atomic, so an interrupted write cannot truncate the live file
+  {
+    const atomicHome = mkdtempSync(path.join(tmpdir(), 'lanshare-atomic-'));
+    try {
+      const saved = configLib.save.toString();
+      check('save() writes to a temp file and renames it into place, never over the live file',
+        /\.tmp/.test(saved) && /renameSync/.test(saved), saved.slice(0, 200));
+    } finally {
+      rmSync(atomicHome, { recursive: true, force: true });
+    }
+  }
 } finally {
   rmSync(home, { recursive: true, force: true });
 }
