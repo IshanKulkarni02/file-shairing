@@ -2,6 +2,36 @@
 
 const $ = (id) => document.getElementById(id);
 
+/**
+ * Never let a failed action look like nothing happened.
+ *
+ * Most ipcMain.handle() calls in desktop/main.js are wrapped in guarded(),
+ * which turns *expected* problems ("that album is not a vault") into a
+ * {ok:false, error} the calling screen renders itself. guarded() rethrows
+ * anything it does not recognise on purpose, so a genuine bug stays loud
+ * rather than being swallowed — but "loud" only worked in the main
+ * process's console, which nobody running the packaged app ever sees.
+ *
+ * The realistic case is Windows-specific and not a bug at all: clearing the
+ * thumbnail cache or emptying trash calls fs.rm, which throws EBUSY/EPERM if
+ * any file in there is open — a thumbnail being served, an antivirus
+ * scanner, an Explorer preview pane. The click handler awaited it with no
+ * catch, so the promise rejected, the refresh after it never ran, and the
+ * button simply did nothing, twice, with no explanation.
+ *
+ * A plain alert matches how the rest of this window already talks (it uses
+ * confirm() throughout) and costs nothing when everything is working.
+ */
+window.addEventListener('unhandledrejection', (event) => {
+  const err = event.reason;
+  const message = err?.message || String(err);
+  // Electron prefixes an IPC rejection with the handler's own frames; the
+  // last line is the part that actually says what went wrong.
+  const clean = message.split('\n').pop().trim();
+  alert(`That didn't work.\n\n${clean}`);
+  event.preventDefault();
+});
+
 function formatBytes(bytes) {
   if (!bytes) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
