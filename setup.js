@@ -7,6 +7,7 @@
 
 const readline = require('readline');
 const configLib = require('./lib/config');
+const sessions = require('./lib/sessions');
 
 function ask(rl, question) {
   return new Promise((resolve) => rl.question(question, (answer) => resolve(answer.trim())));
@@ -66,6 +67,12 @@ async function main() {
   }
 
   configLib.setUser(username, password);
+  // This command is the documented recovery path for a forgotten or
+  // compromised password, so leaving already-signed-in devices signed in
+  // would defeat the point of running it: a stolen session cookie is signed
+  // with the server secret, not the password, and would otherwise keep
+  // working for the full sessionDays no matter what is typed here.
+  sessions.revokeAllForUser(username);
   rl.close();
 
   console.log('\n  Saved.\n');

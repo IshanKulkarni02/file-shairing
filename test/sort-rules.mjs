@@ -266,5 +266,35 @@ check('a file with no camera metadata at all gets no destination', rules.destina
   }
 }
 
+// --- a destination is stored canonically, so it cannot mean two things -----
+// A destination is a library path, but lib/sort-engine.js turns it into a
+// real one with path.join(library, ...segments) — and path.join has no
+// library root to clamp ".." against. Left as typed, "-> /../elsewhere"
+// moved files clean out of the library (confirmed by running it), where the
+// app could no longer see them and undo could not bring them back, since the
+// batch record stores the collapsed path. Normalizing at parse time means
+// the escaping spelling never reaches the engine at all.
+
+{
+  const escaping = [
+    ['/../escaped', '/escaped'],
+    ['/a/../../escaped', '/escaped'],
+    ['/../../../Windows/Temp', '/Windows/Temp'],
+    ['/Photos/../Videos', '/Videos'],
+    ['/a/b/../c', '/a/c'],
+  ];
+  for (const [typed, expected] of escaping) {
+    const parsed = rules.parse(`when kind = image -> ${typed}`);
+    check(`a destination of "${typed}" is stored clamped as "${expected}"`,
+      parsed[0].destination === expected, parsed[0].destination);
+  }
+
+  check('an ordinary destination is left exactly as written',
+    rules.parse('when kind = image -> /Drone/{year}/{month}')[0].destination === '/Drone/{year}/{month}');
+
+  check('destinationFor hands the engine the clamped path, never the escaping spelling',
+    rules.destinationFor(rules.parse('when kind = image -> /../escaped'), { kind: 'image' }) === '/escaped');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -65,7 +65,20 @@ const sortEngineLib = require('../lib/sort-engine');
 const nlRulesLib = require('../lib/nl-rules');
 const indexDbLib = require('../lib/index-db');
 
-const { config, generated } = configLib.loadOrCreate();
+// A config.json that cannot be parsed would otherwise take the whole app
+// down at module load — before any window exists — leaving a double-clicked
+// desktop app that simply does nothing at all, with the reason visible only
+// in a console nobody launched it from. showErrorBox works before app-ready,
+// so this is the one point where the reason can still be shown to someone.
+let config;
+let generated;
+try {
+  ({ config, generated } = configLib.loadOrCreate());
+} catch (err) {
+  dialog.showErrorBox('LANShare cannot start', err.message);
+  app.quit();
+  process.exit(1);
+}
 
 let mainWindow = null;
 let tray = null;
@@ -397,8 +410,13 @@ ipcMain.handle('accounts:update', guarded((event, username, patch) => {
   // account.disabled fresh from config.users on every request, so this is
   // cleanup for the Devices list, not what actually blocks access. See the
   // longer comment on the equivalent HTTP route for why a role demotion
-  // deliberately does not revoke.
-  if (patch?.disabled === true) sessions.revokeAllForUser(username);
+  // deliberately does not revoke — and why a password change must.
+  //
+  // No session is spared here, unlike the HTTP route: this window is the
+  // local control panel, not a signed-in browser session, so there is no
+  // "the tab you are using" to keep alive — every session for that account
+  // is a remote device that should be signed out.
+  if (patch?.disabled === true || patch?.password) sessions.revokeAllForUser(username);
   return { account: updated };
 }));
 
