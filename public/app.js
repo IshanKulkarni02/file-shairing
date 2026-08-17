@@ -18,10 +18,18 @@ const state = {
   // just re-navigating to wherever browsing was left off.
   searching: false,
   searchQuery: '',
+  // 'text' matches names and metadata (GET /api/search); 'content' asks a
+  // local model what a photo actually shows (GET /api/search/content,
+  // Phase N). Toggled by #searchKindBtn, which stays hidden entirely unless
+  // contentSearchAvailable below is true.
+  searchKind: 'text',
   // Set once at boot via /api/me. The server enforces every role boundary
   // regardless — this exists only so an action nobody but an admin could
   // ever complete is not offered to begin with.
   role: null,
+  // Also from /api/me: whether GET /api/search/content has anything to
+  // search yet. False until an admin has built the index at least once.
+  contentSearchAvailable: false,
 };
 
 /**
@@ -451,13 +459,23 @@ function render() {
     albumsSection.hidden = true;
   }
 
-  state.files = sortFiles(state.files);
+  // Content-search results already carry the one order that means anything
+  // for them — ranked by similarity to the query — and re-sorting by the
+  // ordinary newest/oldest/name/largest picker would silently throw that
+  // away (a "red car" query putting its best match last just because it
+  // happened to be uploaded first). Every other view, including a plain
+  // text search, keeps the picker's chosen order as before.
+  if (!(state.searching && state.searchKind === 'content')) {
+    state.files = sortFiles(state.files);
+  }
 
   const mediaSection = $('mediaSection');
   const mosaic = $('mosaic');
   mosaic.textContent = '';
 
-  $('mediaHeading').textContent = state.searching ? 'Search results' : 'Photos & videos';
+  $('mediaHeading').textContent = state.searching
+    ? (state.searchKind === 'content' ? 'Photos like this' : 'Search results')
+    : 'Photos & videos';
 
   if (state.files.length) {
     mediaSection.hidden = false;
@@ -475,7 +493,9 @@ function render() {
   if (isEmpty) {
     if (state.searching) {
       $('emptyTitle').textContent = 'No matches';
-      $('emptyNote').textContent = `Nothing found for "${state.searchQuery}".`;
+      $('emptyNote').textContent = state.searchKind === 'content'
+        ? `Nothing looked like "${state.searchQuery}" — try describing it differently.`
+        : `Nothing found for "${state.searchQuery}".`;
       $('emptyUploadBtn').hidden = true;
     } else {
       $('emptyTitle').textContent = 'Nothing here yet';
@@ -501,8 +521,14 @@ function syncVaultToolbar() {
     $('newE2eVaultBtn').hidden = true;
     $('newAlbumBtn').hidden = true;
     $('lockVaultBtn').hidden = true;
+    // The sort picker has nothing to act on in content-search mode — its
+    // one meaningful order is similarity, not newest/oldest/name/largest —
+    // so it is hidden rather than left offering a choice that silently does
+    // nothing, same reasoning as render() itself skipping sortFiles() there.
+    $('sort').hidden = state.searchKind === 'content';
     return;
   }
+  $('sort').hidden = false;
   const inVault = Boolean(state.vault);
   $('newVaultBtn').hidden = inVault;
   // A private album needs WebCrypto, which browsers only expose in a secure
@@ -571,6 +597,9 @@ function searchResultToFile(row) {
     // plain, unfederated /api/list file never having one) — always treated
     // as "just this one place" when absent, never as "nothing is known".
     locations: row.locations || null,
+    // Content search only (Phase N) — a cosine similarity, not a boolean
+    // match, so results are ranked rather than merely "found".
+    score: typeof row.score === 'number' ? row.score : null,
   };
 }
 
@@ -584,7 +613,9 @@ async function runSearch(text) {
   state.searchQuery = text;
   state.selected.clear();
   try {
-    const data = await api(`/api/search?q=${q(text)}`);
+    const data = state.searchKind === 'content'
+      ? await api(`/api/search/content?q=${q(text)}`)
+      : await api(`/api/search?q=${q(text)}`);
     state.folders = [];
     state.files = data.results.map(searchResultToFile);
     state.vault = null;
@@ -628,6 +659,16 @@ $('searchInput').addEventListener('keydown', (event) => {
 });
 
 $('searchClearBtn').addEventListener('click', () => clearSearch());
+
+$('searchKindBtn').addEventListener('click', () => {
+  state.searchKind = state.searchKind === 'content' ? 'text' : 'content';
+  const isContent = state.searchKind === 'content';
+  $('searchKindBtn').setAttribute('aria-pressed', String(isContent));
+  $('searchInput').placeholder = isContent
+    ? 'Describe what\'s in the photo…' : 'Search your library';
+  const text = $('searchInput').value.trim();
+  if (text) runSearch(text);
+});
 
 // ---------------------------------------------------------------------------
 // Selection
@@ -1394,6 +1435,79 @@ $('centralIndexBtn').addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Content search (Phase N) — building the index is the opt-in: nothing
+// downloads or runs until an admin explicitly asks for it here, the same
+// "nothing happens without a click" shape the central-index setup above
+// has. The button's own label doubles as the progress readout while a build
+// runs, the same way the rules screen's own preview/apply buttons show
+// their progress inline rather than opening a separate panel for it.
+// ---------------------------------------------------------------------------
+
+let contentIndexPoll = null;
+
+function stopContentIndexPoll() {
+  clearInterval(contentIndexPoll);
+  contentIndexPoll = null;
+}
+
+/**
+ * Fetches the current build status once, updates the button accordingly,
+ * and — only while a build is actually running — makes sure a polling
+ * interval is ticking. Safe to call from anywhere (boot, after triggering a
+ * build, on an interval tick) since it always leaves the interval in the
+ * correct state for what it just observed, rather than assuming its caller
+ * already knows whether one is running.
+ */
+async function checkContentIndexStatus() {
+  try {
+    const status = await api('/api/content-index/status');
+    if (status.building) {
+      $('contentIndexBtn').disabled = true;
+      $('contentIndexBtnLabel').textContent = `Indexing… ${status.embedded}/${status.embeddable}`;
+      if (!contentIndexPoll) contentIndexPoll = setInterval(checkContentIndexStatus, 1500);
+      return;
+    }
+    stopContentIndexPoll();
+    $('contentIndexBtn').disabled = false;
+    $('contentIndexBtnLabel').textContent = 'Content search';
+    const justBecameAvailable = !state.contentSearchAvailable && status.embedded > 0;
+    state.contentSearchAvailable = status.embedded > 0;
+    $('searchKindBtn').hidden = !state.contentSearchAvailable;
+    if (justBecameAvailable) toast('Content search is ready', 'good');
+  } catch {
+    stopContentIndexPoll();
+    $('contentIndexBtn').disabled = false;
+    $('contentIndexBtnLabel').textContent = 'Content search';
+  }
+}
+
+$('contentIndexBtn').addEventListener('click', async () => {
+  try {
+    const status = await api('/api/content-index/status');
+    if (!status.building) {
+      if (status.embeddable === 0) {
+        toast('Add some photos or videos first — nothing to index yet', 'good');
+        return;
+      }
+      const remaining = status.embeddable - status.embedded;
+      if (remaining <= 0) {
+        toast('Everything is already indexed for content search', 'good');
+        return;
+      }
+      const downloadNote = status.modelCached
+        ? ''
+        : '\n\nThe first run downloads a local model (a few hundred MB) — this only happens once.';
+      if (!confirm(`Index ${remaining} photo${remaining === 1 ? '' : 's'} for content search?${downloadNote}\n\n`
+        + 'This runs in the background and can take a while for a large library.')) return;
+      await postJson('/api/content-index/build', {});
+    }
+    await checkContentIndexStatus();
+  } catch (err) {
+    toast(err.message, 'bad');
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
@@ -1404,7 +1518,13 @@ $('sort').value = state.sort;
 // that could never complete it.
 api('/api/me').then((me) => {
   state.role = me.role;
+  state.contentSearchAvailable = me.contentSearchAvailable;
   $('centralIndexBtn').hidden = me.role !== 'admin';
+  $('contentIndexBtn').hidden = me.role !== 'admin';
+  $('searchKindBtn').hidden = !me.contentSearchAvailable;
+  // An admin whose index is already mid-build from a previous page load
+  // (or another tab) should see that immediately, not just on next click.
+  if (me.role === 'admin') checkContentIndexStatus();
 }).catch(() => {});
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {

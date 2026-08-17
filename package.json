@@ -52,7 +52,11 @@
     ],
     "asarUnpack": [
       "node_modules/@img/**/*",
-      "node_modules/sharp/**/*"
+      "node_modules/sharp/**/*",
+      "node_modules/@huggingface/**/*",
+      "node_modules/onnxruntime-node/**/*",
+      "node_modules/onnxruntime-common/**/*",
+      "node_modules/onnxruntime-web/**/*"
     ],
     "win": {
       "target": "nsis",
@@ -139,6 +143,7 @@
     }
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "archiver": "^6.0.2",
     "busboy": "^1.6.0",
     "express": "^4.21.2",
