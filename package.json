@@ -58,7 +58,13 @@
       "target": "nsis",
       "icon": "desktop/ui/icon.png",
       "extraResources": [
-        { "from": "vendor/ffmpeg", "to": "ffmpeg", "filter": ["**/*"] }
+        {
+          "from": "vendor/ffmpeg",
+          "to": "ffmpeg",
+          "filter": [
+            "**/*"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -75,25 +81,46 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "category": "public.app-category.photography",
       "icon": "desktop/ui/icon.png",
       "darkModeSupport": true,
       "extraResources": [
-        { "from": "vendor/ffmpeg-mac", "to": "ffmpeg", "filter": ["**/*"] }
+        {
+          "from": "vendor/ffmpeg-mac",
+          "to": "ffmpeg",
+          "filter": [
+            "**/*"
+          ]
+        }
       ]
     },
     "dmg": {
       "title": "LANShare"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Graphics",
       "icon": "desktop/ui/icon.png",
       "synopsis": "Share your photo and video library on your network",
       "extraResources": [
-        { "from": "vendor/ffmpeg-linux", "to": "ffmpeg", "filter": ["**/*"] }
+        {
+          "from": "vendor/ffmpeg-linux",
+          "to": "ffmpeg",
+          "filter": [
+            "**/*"
+          ]
+        }
       ]
     },
     "deb": {
@@ -118,7 +145,7 @@
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "selfsigned": "^5.5.0",
-    "sharp": "^0.33.5"
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@yao-pkg/pkg": "^6.22.0",
