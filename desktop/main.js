@@ -62,6 +62,7 @@ const importLib = require('../lib/import');
 const indexerLib = require('../lib/indexer');
 const sortRulesLib = require('../lib/sort-rules');
 const sortEngineLib = require('../lib/sort-engine');
+const nlRulesLib = require('../lib/nl-rules');
 const indexDbLib = require('../lib/index-db');
 
 const { config, generated } = configLib.loadOrCreate();
@@ -246,6 +247,15 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'ui', 'index.html'));
 
+  // A target="_blank" link (the Ollama info link on the sorting-rules screen)
+  // would otherwise silently no-op — Electron denies window.open by default
+  // unless a handler explicitly allows it. Only http(s) ever gets routed out
+  // to the OS browser; nothing else is opened this way.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
   // Closing the window means different things depending on the setting: hide
   // to the tray and keep serving, or actually quit and stop the server. The
   // choice is read fresh here rather than captured once, so flipping the
@@ -367,7 +377,8 @@ function guarded(fn) {
         || err instanceof syncEngine.SyncError
         || err instanceof importLib.ImportError
         || err instanceof sortRulesLib.SortRulesError
-        || err instanceof sortEngineLib.SortEngineError) {
+        || err instanceof sortEngineLib.SortEngineError
+        || err instanceof nlRulesLib.NlRulesError) {
         return { ok: false, error: err.message };
       }
       throw err;
@@ -666,6 +677,29 @@ ipcMain.handle('rules:undo', guarded(async () => {
   const result = await sortEngineLib.undoLastBatch({ library: libraryPath() });
   if (serverHandle?.indexDb) await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
   return result;
+}));
+
+// Draft/run-once (Phase M) — mirrors POST /api/sort-rules/draft and
+// /run-once exactly, including computing a live preview alongside a
+// draft that parsed, since the renderer shows both from one call.
+ipcMain.handle('rules:draft', guarded(async (event, instruction) => {
+  const draft = await nlRulesLib.draftRule({
+    instruction,
+    host: config.nlRules?.host || nlRulesLib.DEFAULT_HOST,
+    model: config.nlRules?.model || nlRulesLib.DEFAULT_MODEL,
+  });
+  let preview = null;
+  if (draft.parsed) {
+    preview = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries(), rulesText: draft.text });
+  }
+  return { ...draft, preview };
+}));
+
+ipcMain.handle('rules:runOnce', guarded(async (event, text) => {
+  const planned = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries(), rulesText: text });
+  const batch = await sortEngineLib.apply({ library: libraryPath(), moves: planned.moves });
+  if (serverHandle?.indexDb) await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
+  return { batch };
 }));
 
 // --- importing from a camera, drone or card (Phase K) -----------------------

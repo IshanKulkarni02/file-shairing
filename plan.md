@@ -29,7 +29,7 @@ the internet without port forwarding.
 | J | A central index every device can reach | **Done** (relay-backed; GitHub not built, see note) |
 | K | Import on connect — cameras, drones, cards | **Done** |
 | L | Sorting rules, versioned in git | **Done** |
-| M | Instructions in plain language | Not started |
+| M | Instructions in plain language | **Done** (grammar/plumbing tested; real-model quality unverified here) |
 | N | Content search — the fuzzy cases | Not started |
 
 Phases A–G made one machine's library good and let machines reach each other.
@@ -1167,6 +1167,67 @@ ones run once.
 A local 7–8B model fits the RTX 3060's 6 GB VRAM at 4-bit. Ample for drafting a
 filter, inadequate for being trusted with deletions — which is exactly the
 split this design already makes.
+
+**Built:** `lib/nl-rules.js` talks to a local Ollama-compatible HTTP API
+(`127.0.0.1:11434` by default, no account or bill attached — the same
+"no new external credential" reasoning that picked the relay over GitHub in
+Phase J and Nominatim over a paid geocoder in Phase L) and asks it to produce
+exactly one line in **Phase L's own rule grammar**, nothing more exotic. The
+safety property is mechanical, not a prompt instruction: every draft, however
+the model phrases it, is run through the identical `sortRules.parse()` a
+hand-typed rule goes through before it is ever shown, previewed, or actioned.
+A draft that fails to parse — an invalid field, a hallucinated syntax — comes
+back as an ordinary `{text, parsed: null, error}`, displayed and hand-editable
+exactly like a person's own typo, never thrown or silently retried. Only a
+genuine failure to reach the model at all (not running, bad HTTP, empty
+response) is a hard error.
+
+The grammar has no parentheses (Phase L's own choice, for the same
+readability reason), so an instruction like *"move all pics and videos"*
+cannot be expressed as `kind in (image, video)` the way the vision sketch
+above shows it — it has to expand to two full OR'd branches
+(`kind = image or kind = video`, ANDed with whatever else the instruction
+needs on both sides). The few-shot prompt in `GRAMMAR_PROMPT` demonstrates
+this expansion explicitly with the Manali example, rather than leaving the
+model to guess at a shorthand the grammar doesn't actually support.
+
+Two divergences from the sketch above, both deliberate: the resolved GPS
+coordinates are never shown to the user (the rule keeps the place name —
+`gps near "Manali"` — and Phase L's geocoder resolves it same as a hand-typed
+rule would; showing raw coordinates would just be noise nobody asked for),
+and *"store it in Google Drive"* is **not** wired to auto-configure anything.
+Sorting rules only ever move files inside the library; reaching into Phase D's
+sync-target config on the strength of one one-shot sentence is a different
+kind of action than drafting a filter, and this stays on the safe side of that
+line. Instead, `cloudHint()` is a cheap local regex — no model call — that
+adds an informational note pointing at the existing Sync screen whenever an
+instruction mentions cloud storage or backup, alongside the real draft, not
+instead of one.
+
+Reachable the same two ways as Phase L: `POST /api/sort-rules/draft` and
+`/run-once` (admin-only, `lib/server-app.js`) for HTTP, and `rules:draft` /
+`rules:runOnce` IPC handlers in the desktop app calling `lib/nl-rules.js` and
+`lib/sort-engine.js` directly. `run-once` takes rule text straight (no model
+involved) and applies it immediately without ever touching the saved rules
+file — for a draft that is right the first time and does not need to become
+a standing rule. The desktop "Sorting rules" screen gained a "Describe it
+instead" card above the existing rule editor: an instruction box, the drafted
+line shown editable with its live preview, and "Add to my rules" (appends to
+the textarea below, still requires the existing Save button) or "Run once".
+Both actions re-validate server-side regardless of what the original draft
+reported, so hand-editing the drafted line before either is always safe.
+
+**What is not, and cannot be, proven from this environment:** whether a real
+local model's translations are actually *good*. Every test here (22 in
+`test/nl-rules.mjs`, more in `test/sort-rules-routes.mjs`) runs against a
+fake model with an injected response, which proves the plumbing and — above
+all — the validation boundary, but nothing in this environment can judge
+translation quality, and `test/sort-rules-routes.mjs` proves the honest
+fallback for exactly this environment: with nothing listening on
+`127.0.0.1:11434`, drafting fails cleanly with a 400 rather than hanging or
+crashing, the same boundary Phase L draws around a Nominatim lookup with no
+network. Trying it against a real Ollama install is unverified and stated
+here plainly rather than implied by green tests.
 
 ## N — Content search
 

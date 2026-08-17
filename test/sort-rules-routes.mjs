@@ -140,6 +140,45 @@ try {
   check('the file is genuinely back where it started after undo',
     body.files?.some((f) => f.name === `${TOKEN}.jpg`), JSON.stringify(body));
 
+  // --- natural-language drafting (Phase M) ------------------------------------
+  // No real local model is expected to be running wherever this suite runs, so
+  // what is actually proven is that the route correctly reports that honestly
+  // rather than hanging or crashing — the same boundary test/nl-rules.mjs draws
+  // around lib/nl-rules.js itself, one layer up.
+
+  res = await admin('/api/sort-rules/draft', json({ instruction: 'keep drone shots in /Drone' }));
+  body = await res.json();
+  check('drafting without a local model available fails clearly rather than hanging or crashing',
+    res.status === 400 && typeof body.error === 'string', JSON.stringify(body));
+
+  res = await admin('/api/sort-rules/draft', json({ instruction: '   ' }));
+  check('drafting from a blank instruction is refused', res.status === 400, `got ${res.status}`);
+
+  // run-once needs no model at all — it takes rule text directly, exactly
+  // like a draft that has already been reviewed and (if needed) hand-edited.
+  res = await uploadFile(admin, INBOX, `${TOKEN}-once.jpg`, Buffer.from(`once ${RUN}`));
+  await rebuildAndWait(admin);
+
+  res = await admin('/api/sort-rules/run-once', json({ text: `when kind = image -> ${INBOX}/RunOnce` }));
+  body = await res.json();
+  check('run-once applies a rule that was never saved', res.status === 200
+    && body.moved?.some((m) => m.from === `${INBOX}/${TOKEN}-once.jpg`), JSON.stringify(body));
+
+  res = await admin('/api/sort-rules');
+  body = await res.json();
+  check('run-once never touched the saved rules file', body.text === ruleText, JSON.stringify(body));
+
+  res = await admin(`/api/list?path=${q(INBOX)}/RunOnce`);
+  body = await res.json();
+  check('the file genuinely moved to the one-off destination',
+    body.files?.some((f) => f.name === `${TOKEN}-once.jpg`), JSON.stringify(body));
+
+  res = await admin('/api/sort-rules/undo', { method: 'POST' });
+  check('a run-once batch is undoable exactly like a saved rule\'s apply', res.status === 200, `got ${res.status}`);
+
+  res = await admin('/api/sort-rules/run-once', json({ text: 'not a valid rule at all' }));
+  check('run-once refuses text that does not parse', res.status === 400, `got ${res.status}`);
+
   // --- admin-only, every route ------------------------------------------------
 
   await admin('/api/accounts', json({ username: `viewer-${RUN}`, password: 'Testpass123', role: 'viewer', roots: ['/'] }));
@@ -154,8 +193,10 @@ try {
     ['POST', '/api/sort-rules/apply'],
     ['GET', '/api/sort-rules/batches'],
     ['POST', '/api/sort-rules/undo'],
+    ['POST', '/api/sort-rules/draft'],
+    ['POST', '/api/sort-rules/run-once'],
   ]) {
-    res = await viewer(path, method === 'POST' ? json({ text: 'when kind = image -> /X' }) : {});
+    res = await viewer(path, method === 'POST' ? json({ text: 'when kind = image -> /X', instruction: 'x' }) : {});
     check(`a non-admin is refused on ${method} ${path}`, res.status === 403, `got ${res.status}`);
   }
 } catch (err) {

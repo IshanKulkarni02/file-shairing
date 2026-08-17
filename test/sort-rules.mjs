@@ -92,6 +92,35 @@ expectParseError('when camera.make = "DJI" -> Drone', 'absolute library path');
 expectParseError('when camera.make = "DJI" -> /Drone/{week}', 'unknown placeholder');
 expectParseError('when -> /Drone', 'needs a condition');
 expectParseError('when gps near "" -> /Drone', 'needs a place name');
+expectParseError('when date = "11-08-2026" -> /Rides', 'plain YYYY-MM-DD');
+expectParseError('when date = "2026/08/11" -> /Rides', 'plain YYYY-MM-DD');
+expectParseError('when date = "today" -> /Rides', 'plain YYYY-MM-DD');
+
+{
+  const parsed = rules.parse('when date = "2026-08-11" -> /Rides/Today');
+  check('a well-formed date clause parses', parsed[0].conditionGroups[0][0].field === 'date'
+    && parsed[0].conditionGroups[0][0].value === '2026-08-11');
+}
+
+// --- evaluation: a date clause matches the whole calendar day, not the instant --
+
+{
+  const rideRule = rules.parse('when date = "2026-08-11" -> /Rides/Today');
+  check('a file captured that same day, any time of day, matches',
+    rules.destinationFor(rideRule, { capturedAt: '2026-08-11T23:59:59' }) === '/Rides/Today');
+  check('the very start of that day matches too',
+    rules.destinationFor(rideRule, { capturedAt: '2026-08-11T00:00:00' }) === '/Rides/Today');
+  check('the day before does not match', rules.destinationFor(rideRule, { capturedAt: '2026-08-10T23:59:59' }) === null);
+  check('the day after does not match', rules.destinationFor(rideRule, { capturedAt: '2026-08-12T00:00:00' }) === null);
+  check('a file with no capture date at all never matches a date clause',
+    rules.destinationFor(rideRule, {}) === null);
+
+  const combined = rules.parse('when date = "2026-08-11" and kind = image -> /Rides/Today/Photos');
+  check('a date clause combines with other clauses via AND like any other field',
+    rules.destinationFor(combined, { capturedAt: '2026-08-11T12:00:00', kind: 'image' }) === '/Rides/Today/Photos');
+  check('AND still requires both — the date matching alone is not enough',
+    rules.destinationFor(combined, { capturedAt: '2026-08-11T12:00:00', kind: 'video' }) === null);
+}
 
 // --- evaluation: equality, case-insensitive value matching -------------------
 

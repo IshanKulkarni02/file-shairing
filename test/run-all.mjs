@@ -67,6 +67,7 @@ const SUITES = [
   { name: 'sort-rules', file: 'sort-rules.mjs', kind: 'plain' },
   { name: 'geocode', file: 'geocode.mjs', kind: 'plain' },
   { name: 'sort-engine', file: 'sort-engine.mjs', kind: 'plain' },
+  { name: 'nl-rules', file: 'nl-rules.mjs', kind: 'plain' },
   { name: 'smoke', file: 'smoke.mjs', kind: 'server' },
   { name: 'permissions', file: 'permissions.mjs', kind: 'server' },
   { name: 'vault-routes', file: 'vault-routes.mjs', kind: 'server' },
