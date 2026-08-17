@@ -372,6 +372,24 @@ try {
     const results = db.searchByContent(unit(1, 0, 0), { model: MODEL });
     check('a hash shared by two files still yields exactly one search result, not one per path',
       results.length === 1, results.length);
+
+    // Which copy represents the hash has to be the caller's call, because an
+    // embedding belongs to content and a restricted account may be able to
+    // see only one of the albums that content sits in. Choosing blindly and
+    // filtering afterwards loses the result entirely — the account has a
+    // perfectly visible copy but the invisible one stood in for it.
+    const onlyCopy = db.searchByContent(unit(1, 0, 0), {
+      model: MODEL,
+      isVisible: (row) => row.rel_path === '/x-copy.jpg',
+    });
+    check('isVisible picks the copy the caller can actually see',
+      onlyCopy.length === 1 && onlyCopy[0].rel_path === '/x-copy.jpg', JSON.stringify(onlyCopy.map((r) => r.rel_path)));
+
+    check('a hash with no visible copy at all yields nothing, rather than leaking one',
+      db.searchByContent(unit(1, 0, 0), { model: MODEL, isVisible: () => false }).length === 0);
+
+    check('the score still travels with the chosen copy',
+      typeof onlyCopy[0]._score === 'number');
     db.close();
   }
 } catch (err) {

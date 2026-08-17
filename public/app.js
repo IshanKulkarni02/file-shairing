@@ -1236,6 +1236,12 @@ $('lockVaultBtn').addEventListener('click', async () => {
     } else {
       await postJson('/api/vaults/lock', { path: state.vault.path });
     }
+    // Locking means the server will refuse these tiles from now on, but
+    // this browser's own service-worker cache would keep serving the ones
+    // it already has — recognisable pictures of exactly what was just
+    // locked. Cleared per-vault granularity is not worth the bookkeeping
+    // when a thumbnail cache costs one scroll to rebuild.
+    await clearCachedThumbnails();
     toast('Locked', 'good');
     await navigate(state.path, { push: false });
   } catch (err) {
@@ -1381,8 +1387,35 @@ $('sort').addEventListener('change', (event) => {
   render();
 });
 
+/**
+ * Drop every thumbnail this browser has cached.
+ *
+ * public/sw.js caches /api/thumb and — deliberately, since a thumbnail URL
+ * carries the file's mtime and is therefore immutable — serves a hit
+ * straight from the cache without asking the server. That is right for
+ * speed and wrong the moment the answer to "may this person see it" has
+ * changed: signing out, or locking a vault, otherwise leaves a folder of
+ * recognisable pictures that the server would now refuse to serve, sitting
+ * in a cache the next person to use this browser can reach.
+ *
+ * Best-effort by design: no Cache Storage (older browsers, plain HTTP where
+ * service workers never registered) simply means there was nothing cached
+ * to clear, which is the safe direction to fail in.
+ */
+async function clearCachedThumbnails() {
+  if (!window.caches?.keys) return;
+  try {
+    const names = await caches.keys();
+    await Promise.all(names.filter((n) => n.includes('thumbs')).map((n) => caches.delete(n)));
+  } catch {
+    /* nothing cached, or storage unavailable — either way there is nothing to leak */
+  }
+}
+
 $('signOutBtn').addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' });
+  // Before leaving the page, or the navigation cancels it half-done.
+  await clearCachedThumbnails();
   location.href = '/login';
 });
 
