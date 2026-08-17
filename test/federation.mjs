@@ -250,6 +250,77 @@ async function run() {
     restoreConnect();
     rmSync(library, { recursive: true, force: true });
   }
+
+  // --- a peer sending nonsense must not take the whole search down ---------
+  // A peer's response is untrusted input. The authenticated channel proves
+  // which machine sent it, not that the machine is healthy, running the same
+  // version, or still under its owner's control. Before these rows were
+  // checked, a null `path` threw inside the caching loop, and because peers
+  // are fanned out with Promise.all that one row from one peer rejected the
+  // entire search — losing the asking machine's own local results too.
+
+  {
+    const library = scratchLibrary();
+    mockConnect(async () => ({
+      json: async () => ({
+        results: [
+          { path: null, name: 'evil.jpg', kind: 'image', size: 1, mtime: 1, hash: 'bad1' },
+          { path: 12345, name: 'evil2.jpg', kind: 'image', size: 1, mtime: 1, hash: 'bad2' },
+          { path: { nope: true }, name: 'evil3.jpg', kind: 'image', size: 1, mtime: 1, hash: 'bad3' },
+          { name: 'no-path.jpg', kind: 'image', size: 1, mtime: 1, hash: 'bad4' },
+          { path: '/ok.jpg', name: 'ok.jpg', kind: null, size: 1, mtime: 1, hash: 'bad5' },
+          { path: '/ok2.jpg', name: 'ok2.jpg', kind: 'image', size: 1, mtime: NaN, hash: 'bad6' },
+          // The one well-formed row in the batch.
+          { path: '/good.jpg', name: 'good.jpg', kind: 'image', size: 10, mtime: 1000, hash: 'good' },
+        ],
+      }),
+    }));
+
+    const { results, peers } = await federation.federatedSearch({
+      library,
+      config: { connections: [{ id: 'p1', label: 'Peer One' }] },
+      secrets: availableSecrets,
+      localResults: [{ path: '/mine.jpg', name: 'mine.jpg', kind: 'image', size: 5, mtime: 5, hash: 'mine', capturedAt: null }],
+      params: {},
+    });
+
+    check('a peer sending malformed rows does not reject the whole search',
+      Array.isArray(results), JSON.stringify(peers));
+    check('the local results survive a peer behaving badly',
+      results.some((r) => r.hash === 'mine'), JSON.stringify(results.map((r) => r.hash)));
+    check('the one well-formed row from that peer is still used',
+      results.some((r) => r.hash === 'good'), JSON.stringify(results.map((r) => r.hash)));
+    check('none of the malformed rows made it through',
+      !results.some((r) => String(r.hash || '').startsWith('bad')), JSON.stringify(results.map((r) => r.hash)));
+    check('the peer is still reported reachable, with a note about what was dropped',
+      peers[0].reachable === true && typeof peers[0].note === 'string', JSON.stringify(peers));
+
+    restoreConnect();
+    rmSync(library, { recursive: true, force: true });
+  }
+
+  {
+    const library = scratchLibrary();
+    // A peer that fails in a way nothing anticipated — not a network error,
+    // not a bad row, but a throw from somewhere inside the call.
+    mockConnect(async () => { throw new TypeError('something nobody predicted'); });
+
+    const { results, peers } = await federation.federatedSearch({
+      library,
+      config: { connections: [{ id: 'p1', label: 'Peer One' }] },
+      secrets: availableSecrets,
+      localResults: [{ path: '/mine.jpg', name: 'mine.jpg', kind: 'image', size: 5, mtime: 5, hash: 'mine', capturedAt: null }],
+      params: {},
+    });
+
+    check('an unanticipated throw from one peer still returns the local results',
+      results.some((r) => r.hash === 'mine'), JSON.stringify(results.map((r) => r.hash)));
+    check('and that peer is reported unreachable rather than crashing the request',
+      peers.length === 1 && peers[0].reachable === false, JSON.stringify(peers));
+
+    restoreConnect();
+    rmSync(library, { recursive: true, force: true });
+  }
 }
 
 try {
