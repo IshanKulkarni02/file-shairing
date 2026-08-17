@@ -443,6 +443,34 @@
       <code>git log</code> away.
     </p>
 
+    <div class="card" id="rulesDraftCard">
+      <h3 style="font-size:.9rem;margin-bottom:.2rem">Describe it instead</h3>
+      <p class="panel__sub" style="margin:0 0 .6rem">
+        Type a plain sentence and a local model on this machine (<a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>,
+        not running here by default) drafts a rule below for you to review — nothing is saved or run until you say so.
+      </p>
+      <div class="field-row">
+        <input class="field__input" id="rulesInstructionInput" type="text" style="flex:1"
+          placeholder='e.g. &quot;keep drone shots in /Drone, organised by year and month&quot;'>
+        <button class="btn btn--primary" id="rulesDraftBtn">Draft</button>
+      </div>
+      <p class="field__error" id="rulesDraftError"></p>
+
+      <div id="rulesDraftResult" hidden style="margin-top:.75rem">
+        <textarea class="field__input" id="rulesDraftText" rows="2" spellcheck="false"
+          style="font-family:ui-monospace,Consolas,monospace;font-size:.85rem;white-space:pre;resize:vertical"></textarea>
+        <p class="field__error" id="rulesDraftParseError"></p>
+        <p class="panel__sub" id="rulesDraftNote" style="margin:.4rem 0 0"></p>
+        <p class="panel__sub" id="rulesDraftPreviewSub" style="margin:.4rem 0 0"></p>
+        <div class="row-list" id="rulesDraftPreviewList" style="max-height:200px;overflow:auto;margin-top:.4rem"></div>
+        <div class="field-row" style="margin-top:.6rem">
+          <button class="btn btn--primary" id="rulesDraftAddBtn">Add to my rules</button>
+          <button class="btn btn--ghost" id="rulesDraftRunOnceBtn">Run once</button>
+          <button class="btn btn--ghost" id="rulesDraftDiscardBtn">Discard</button>
+        </div>
+      </div>
+    </div>
+
     <div class="card">
       <h3 style="font-size:.9rem;margin-bottom:.6rem">Your rules</h3>
       <textarea class="field__input" id="rulesText" rows="8" spellcheck="false"

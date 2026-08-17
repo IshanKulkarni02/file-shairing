@@ -1,0 +1,176 @@
+/**
+ * lib/nl-rules.js against a fake local model — no real Ollama call ever
+ * leaves this test. What is proven here is the plumbing and, above all,
+ * the safety property: every draft, however the fake model phrases it,
+ * only ever reaches the caller after going through the exact same
+ * sortRules.parse() a hand-typed rule would.
+ *
+ *   node test/nl-rules.mjs
+ */
+
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const nlRules = require(path.join(here, '..', 'lib', 'nl-rules.js'));
+
+let pass = 0;
+let fail = 0;
+function check(name, ok, detail = '') {
+  if (ok) { pass++; console.log(`  PASS  ${name}`); }
+  else { fail++; console.log(`  FAIL  ${name}${detail ? ' -> ' + detail : ''}`); }
+}
+
+/** A fake Ollama /api/generate — returns whatever text is given, and records every call. */
+function fakeModel(responseText, { ok = true, status = 200 } = {}) {
+  const calls = [];
+  const fn = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return { ok, status, json: async () => ({ response: responseText }) };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+const TODAY = new Date('2026-08-11T15:00:00Z');
+
+// --- a clean, well-formed draft ------------------------------------------------
+
+{
+  const fetchImpl = fakeModel('when camera.make = "DJI" -> /Drone/{year}/{month}');
+  const draft = await nlRules.draftRule({ instruction: 'keep drone shots in /Drone', fetchImpl, now: TODAY });
+
+  check('a well-formed draft parses successfully', draft.parsed !== null && draft.error === null, JSON.stringify(draft));
+  check('the parsed rule\'s destination matches what the model wrote', draft.parsed.destination === '/Drone/{year}/{month}');
+  check('the request went to the default local host', fetchImpl.calls[0].url === `${nlRules.DEFAULT_HOST}/api/generate`);
+  check('the request asked for a non-streaming response', fetchImpl.calls[0].body.stream === false);
+  check('the request carries the instruction inside its prompt',
+    fetchImpl.calls[0].body.prompt.includes('keep drone shots in /Drone'));
+  check('the prompt substitutes the injected "today" wherever the model needs it',
+    fetchImpl.calls[0].body.prompt.includes('2026-08-11'));
+}
+
+// --- markdown fences and stray prose around the actual rule --------------------
+
+{
+  const fetchImpl = fakeModel('Sure! Here is the rule:\n```\nwhen kind = video -> /Videos\n```\nHope that helps.');
+  const draft = await nlRules.draftRule({ instruction: 'sort my videos', fetchImpl, now: TODAY });
+  check('the rule line is correctly extracted from a fenced, chatty response',
+    draft.text === 'when kind = video -> /Videos' && draft.parsed !== null, JSON.stringify(draft));
+}
+
+{
+  const fetchImpl = fakeModel('  when kind = image -> /Photos  \n\n');
+  const draft = await nlRules.draftRule({ instruction: 'sort my photos', fetchImpl, now: TODAY });
+  check('surrounding whitespace and blank lines do not break extraction', draft.parsed !== null, JSON.stringify(draft));
+}
+
+// --- a draft that fails to parse is reported, not thrown -----------------------
+
+{
+  const fetchImpl = fakeModel('I am not sure what you mean by that.');
+  const draft = await nlRules.draftRule({ instruction: 'do something vague', fetchImpl, now: TODAY });
+  check('an unparseable draft does not throw', draft !== undefined);
+  check('it is reported as a normal, named error instead', draft.parsed === null && typeof draft.error === 'string' && draft.error.length > 0,
+    JSON.stringify(draft));
+  check('the raw text is still returned, so it can be shown and hand-edited', draft.text.length > 0);
+}
+
+{
+  const fetchImpl = fakeModel('when camera.brand = "DJI" -> /Drone'); // "brand" is not a real field
+  const draft = await nlRules.draftRule({ instruction: 'drone shots', fetchImpl, now: TODAY });
+  check('a draft using an invalid field is caught by the same validator a hand-typed rule would hit',
+    draft.parsed === null && draft.error.includes('unknown field'), JSON.stringify(draft));
+}
+
+{
+  const fetchImpl = fakeModel('when camera.make = "DJI" -> /Drone\nwhen kind = video -> /Videos');
+  const draft = await nlRules.draftRule({ instruction: 'two things at once', fetchImpl, now: TODAY });
+  check('a draft is only ever accepted as exactly one rule — extra lines are ignored, not silently combined',
+    draft.text === 'when camera.make = "DJI" -> /Drone' && draft.parsed !== null, JSON.stringify(draft));
+}
+
+// --- failures asking the model at all — these DO throw --------------------------
+
+{
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: '   ', fetchImpl: fakeModel('irrelevant'), now: TODAY });
+  } catch (err) {
+    rejected = err;
+  }
+  check('an empty instruction is refused before any request is even attempted',
+    rejected instanceof nlRules.NlRulesError, String(rejected));
+}
+
+{
+  const throwingFetch = async () => { throw new Error('ECONNREFUSED'); };
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: 'sort my photos', fetchImpl: throwingFetch, now: TODAY });
+  } catch (err) {
+    rejected = err;
+  }
+  check('a local model that cannot be reached at all throws a clear, specific error',
+    rejected instanceof nlRules.NlRulesError && rejected.message.includes('is it running'), String(rejected));
+}
+
+{
+  const badStatusFetch = fakeModel('irrelevant', { ok: false, status: 500 });
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: 'sort my photos', fetchImpl: badStatusFetch, now: TODAY });
+  } catch (err) {
+    rejected = err;
+  }
+  check('a non-OK HTTP response from the model server throws rather than being treated as a draft',
+    rejected instanceof nlRules.NlRulesError, String(rejected));
+}
+
+{
+  const malformedFetch = async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('bad json'); } });
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: 'sort my photos', fetchImpl: malformedFetch, now: TODAY });
+  } catch (err) {
+    rejected = err;
+  }
+  check('a response body that is not valid JSON throws rather than crashing', rejected instanceof nlRules.NlRulesError);
+}
+
+{
+  const emptyFetch = async () => ({ ok: true, status: 200, json: async () => ({ response: '   ' }) });
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: 'sort my photos', fetchImpl: emptyFetch, now: TODAY });
+  } catch (err) {
+    rejected = err;
+  }
+  check('an empty response from the model throws rather than silently drafting nothing',
+    rejected instanceof nlRules.NlRulesError);
+}
+
+// --- the cloud-storage hint: a plain local check, not a model call -------------
+
+check('an instruction mentioning Google Drive gets an informational note',
+  typeof nlRules.cloudHint('move these to /Rides/Manali and store it in Google Drive') === 'string');
+check('an instruction mentioning a backup gets a note too',
+  typeof nlRules.cloudHint('please back up these files somewhere safe') === 'string');
+check('an ordinary instruction with no cloud mention gets no note',
+  nlRules.cloudHint('keep drone shots in /Drone') === null);
+
+{
+  const fetchImpl = fakeModel('when gps near "Manali" -> /Rides/Manali');
+  const draft = await nlRules.draftRule({
+    instruction: 'move my Manali trip to /Rides/Manali and back it up to Google Drive',
+    fetchImpl,
+    now: TODAY,
+  });
+  check('the cloud hint travels alongside a real draft, not instead of one',
+    draft.parsed !== null && typeof draft.note === 'string', JSON.stringify(draft));
+}
+
+console.log(`\n  ${pass} passed, ${fail} failed\n`);
+process.exit(fail ? 1 : 0);

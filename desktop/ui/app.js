@@ -1751,25 +1751,27 @@ $('rulesPreviewBtn').addEventListener('click', async () => {
   }
 });
 
-function renderRulesPreview(planResult) {
-  $('rulesPreviewCard').hidden = false;
-  const container = $('rulesPreviewList');
+/** Shared by the main preview list and the natural-language draft's own preview. */
+function renderMoveRows(container, moves, limit = 200) {
   container.textContent = '';
-
-  if (!planResult.moves.length) {
+  if (!moves.length) {
     container.innerHTML = '<p class="empty-note" style="padding:1rem">Nothing would move — every file is '
       + 'already where its rules put it.</p>';
-  } else {
-    for (const move of planResult.moves.slice(0, 200)) {
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.innerHTML = '<div class="row__main"><div class="row__title"></div><div class="row__sub"></div></div>';
-      row.querySelector('.row__title').textContent = move.name;
-      row.querySelector('.row__sub').textContent = `${move.path}  →  ${move.destinationAlbum}`;
-      container.append(row);
-    }
+    return;
   }
+  for (const move of moves.slice(0, limit)) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="row__main"><div class="row__title"></div><div class="row__sub"></div></div>';
+    row.querySelector('.row__title').textContent = move.name;
+    row.querySelector('.row__sub').textContent = `${move.path}  →  ${move.destinationAlbum}`;
+    container.append(row);
+  }
+}
 
+function renderRulesPreview(planResult) {
+  $('rulesPreviewCard').hidden = false;
+  renderMoveRows($('rulesPreviewList'), planResult.moves);
   $('rulesPreviewSub').textContent = `${planResult.moves.length} file${planResult.moves.length === 1 ? '' : 's'} `
     + `would move, ${planResult.unmatched.length} match no rule and would stay put.`
     + (planResult.moves.length > 200 ? ' Showing the first 200.' : '');
@@ -1798,6 +1800,91 @@ $('rulesApplyBtn').addEventListener('click', async () => {
 });
 
 $('rulesPreviewCloseBtn').addEventListener('click', () => { $('rulesPreviewCard').hidden = true; });
+
+// Natural-language drafting (Phase M) — a local model turns a typed sentence
+// into one rule line, shown here editable, never saved or run without an
+// explicit click. "Run once" and "Add to my rules" both re-validate on the
+// main process side regardless of what draftRule originally reported, so
+// hand-editing the drafted line before either action is always safe.
+
+$('rulesDraftBtn').addEventListener('click', async () => {
+  const instruction = $('rulesInstructionInput').value.trim();
+  $('rulesDraftError').classList.remove('is-shown');
+  if (!instruction) {
+    $('rulesDraftError').textContent = 'Type an instruction first';
+    $('rulesDraftError').classList.add('is-shown');
+    return;
+  }
+
+  $('rulesDraftBtn').disabled = true;
+  $('rulesDraftBtn').textContent = 'Drafting…';
+  try {
+    const result = await window.lanshare.rules.draft(instruction);
+    if (!result.ok) {
+      $('rulesDraftResult').hidden = true;
+      $('rulesDraftError').textContent = result.error;
+      $('rulesDraftError').classList.add('is-shown');
+      return;
+    }
+    renderRulesDraft(result);
+  } finally {
+    $('rulesDraftBtn').disabled = false;
+    $('rulesDraftBtn').textContent = 'Draft';
+  }
+});
+
+function renderRulesDraft(result) {
+  $('rulesDraftResult').hidden = false;
+  $('rulesDraftText').value = result.text;
+  $('rulesDraftParseError').textContent = result.error || '';
+  $('rulesDraftParseError').classList.toggle('is-shown', Boolean(result.error));
+  $('rulesDraftNote').textContent = result.note || '';
+
+  if (result.preview) {
+    renderMoveRows($('rulesDraftPreviewList'), result.preview.moves);
+    $('rulesDraftPreviewSub').textContent = `${result.preview.moves.length} file${result.preview.moves.length === 1 ? '' : 's'} `
+      + `would move, ${result.preview.unmatched.length} match no rule and would stay put.`;
+  } else {
+    $('rulesDraftPreviewList').textContent = '';
+    $('rulesDraftPreviewSub').textContent = '';
+  }
+}
+
+$('rulesDraftAddBtn').addEventListener('click', () => {
+  const text = $('rulesDraftText').value.trim();
+  if (!text) return;
+  const current = $('rulesText').value;
+  $('rulesText').value = current && !current.endsWith('\n') ? `${current}\n${text}` : `${current}${text}`;
+  $('rulesDraftResult').hidden = true;
+  $('rulesInstructionInput').value = '';
+  $('rulesSaveNote').textContent = 'Added below — click "Save rules" to make it active.';
+});
+
+$('rulesDraftRunOnceBtn').addEventListener('click', async () => {
+  const text = $('rulesDraftText').value.trim();
+  if (!text) return;
+  if (!confirm('Run this rule once against your library right now? It will not be saved, and '
+    + 'can be undone as one action afterwards.')) return;
+
+  $('rulesDraftRunOnceBtn').disabled = true;
+  $('rulesDraftRunOnceBtn').textContent = 'Running…';
+  try {
+    const result = await window.lanshare.rules.runOnce(text);
+    if (!result.ok) {
+      $('rulesDraftParseError').textContent = result.error;
+      $('rulesDraftParseError').classList.add('is-shown');
+      return;
+    }
+    $('rulesDraftResult').hidden = true;
+    $('rulesInstructionInput').value = '';
+    await loadRulesBatches();
+  } finally {
+    $('rulesDraftRunOnceBtn').disabled = false;
+    $('rulesDraftRunOnceBtn').textContent = 'Run once';
+  }
+});
+
+$('rulesDraftDiscardBtn').addEventListener('click', () => { $('rulesDraftResult').hidden = true; });
 
 // ---------------------------------------------------------------------------
 // First-run setup

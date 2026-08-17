@@ -120,6 +120,8 @@ contextBridge.exposeInMainWorld('lanshare', {
     apply: () => invoke('rules:apply'),
     batches: () => invoke('rules:batches'),
     undo: () => invoke('rules:undo'),
+    draft: (instruction) => invoke('rules:draft', instruction),
+    runOnce: (text) => invoke('rules:runOnce', text),
   },
 
   capture: {
