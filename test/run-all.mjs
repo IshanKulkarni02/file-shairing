@@ -58,6 +58,7 @@ const SUITES = [
   { name: 'e2e-crypto', file: 'e2e-crypto.mjs', kind: 'plain' },
   { name: 'metadata', file: 'metadata.mjs', kind: 'plain' },
   { name: 'metadata-fuzz', file: 'metadata-fuzz.mjs', kind: 'plain' },
+  { name: 'ui-contracts', file: 'ui-contracts.mjs', kind: 'plain' },
   { name: 'index-db', file: 'index-db.mjs', kind: 'plain' },
   { name: 'indexer', file: 'indexer.mjs', kind: 'plain' },
   { name: 'federation', file: 'federation.mjs', kind: 'plain' },

@@ -63,6 +63,20 @@ body {
 h1, h2, h3 { font-family: var(--font-display); font-weight: 700; margin: 0; }
 button { font: inherit; color: inherit; cursor: pointer; border: none; background: none; }
 
+/* The browser's own [hidden] rule is user-agent origin, so any author rule
+   that sets display outranks it regardless of selector specificity. This
+   window hides everything by toggling .hidden from JS, and two of the things
+   it hides — .setup (display:flex) and .btn (display:inline-flex) — set
+   display themselves, so without this those elements stay on screen after
+   being "hidden".
+
+   That is not a cosmetic problem: the capture overlay's Cancel, Never, Try
+   again and Close buttons all ran correctly and then failed to make the
+   overlay go away, which is indistinguishable from a dead button. The web
+   gallery's stylesheet already carries the identical rule for the identical
+   reason. */
+[hidden] { display: none !important; }
+
 /* -------------------------------------------------------------------------
    Nav rail
    ------------------------------------------------------------------------- */
