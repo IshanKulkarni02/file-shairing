@@ -698,12 +698,12 @@ ipcMain.handle('rules:save', guarded((event, text, expectedVersion = null) => {
 }));
 
 ipcMain.handle('rules:plan', guarded(async () => {
-  const result = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries() });
+  const result = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries(), db: serverHandle?.indexDb });
   return { result };
 }));
 
 ipcMain.handle('rules:apply', guarded(async () => {
-  const planned = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries() });
+  const planned = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries(), db: serverHandle?.indexDb });
   const batch = await sortEngineLib.apply({ library: libraryPath(), moves: planned.moves });
   if (serverHandle?.indexDb) await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
   return { batch };
@@ -728,7 +728,9 @@ ipcMain.handle('rules:draft', guarded(async (event, instruction) => {
   });
   let preview = null;
   if (draft.parsed) {
-    preview = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries(), rulesText: draft.text });
+    preview = await sortEngineLib.plan({
+      library: libraryPath(), entries: currentIndexEntries(), rulesText: draft.text, db: serverHandle?.indexDb,
+    });
   }
   return { ...draft, preview };
 }));
@@ -750,7 +752,9 @@ ipcMain.handle('rules:setModel', guarded((event, model) => {
 }));
 
 ipcMain.handle('rules:runOnce', guarded(async (event, text) => {
-  const planned = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries(), rulesText: text });
+  const planned = await sortEngineLib.plan({
+    library: libraryPath(), entries: currentIndexEntries(), rulesText: text, db: serverHandle?.indexDb,
+  });
   const batch = await sortEngineLib.apply({ library: libraryPath(), moves: planned.moves });
   if (serverHandle?.indexDb) await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
   return { batch };
@@ -820,7 +824,7 @@ ipcMain.handle('capture:importNow', guarded(async () => {
           .map((c) => serverHandle.indexDb.getByPath(toLibraryRelPath(c.dest)))
           .filter(Boolean)
           .map(indexDbLib.dbRowToResult);
-        const planned = await sortEngineLib.plan({ library: libraryPath(), entries, rulesText });
+        const planned = await sortEngineLib.plan({ library: libraryPath(), entries, rulesText, db: serverHandle?.indexDb });
         if (planned.moves.length) {
           const batch = await sortEngineLib.apply({ library: libraryPath(), moves: planned.moves });
           sorted = batch.moved.length;

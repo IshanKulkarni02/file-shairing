@@ -374,6 +374,53 @@ check('a file with no camera metadata at all gets no destination', rules.destina
     })());
 }
 
+// --- {trip} and "when trip = ..." (Phase O1) --------------------------------
+// trip is never a real property a file "has" the way camera.make is — it is
+// resolved by lib/sort-engine.js onto file.trip before evaluation, looking
+// up the file's *approved* cluster (see lib/index-db.js's
+// approvedTripForHash()). This layer only needs to prove the grammar and
+// substitution treat it exactly like any other field once it's there.
+
+{
+  check('trip is a recognised field', rules.FIELDS.includes('trip'), rules.FIELDS);
+  check('{trip} is a recognised placeholder', rules.PLACEHOLDERS.includes('trip'), rules.PLACEHOLDERS);
+
+  const byTrip = rules.parse('when trip = "Motocamping_Nov" -> /Rides/{trip}/{day}/{camera}');
+  const at = '2026-11-05T10:00:00';
+
+  check('a file whose resolved trip matches the condition is routed there',
+    rules.destinationFor(
+      byTrip, { kind: 'image', trip: 'Motocamping_Nov', cameraModel: 'FC3582', capturedAt: at }, () => null,
+    ) === '/Rides/Motocamping_Nov/05/FC3582');
+  check('trip matching is case-insensitive, like every other field — though {trip} still substitutes the file\'s own casing, same as {make}/{model} do',
+    rules.destinationFor(
+      byTrip, { kind: 'image', trip: 'motocamping_nov', cameraModel: 'FC3582', capturedAt: at }, () => null,
+    ) === '/Rides/motocamping_nov/05/FC3582');
+  check('a file with no resolved trip at all does not match a trip-gated rule',
+    rules.destinationFor(byTrip, { kind: 'image', trip: null, cameraModel: 'FC3582', capturedAt: at }, () => null) === null);
+  check('a file belonging to a different trip does not match either',
+    rules.destinationFor(
+      byTrip, { kind: 'image', trip: 'Some_Other_Trip', cameraModel: 'FC3582', capturedAt: at }, () => null,
+    ) === null);
+
+  const anyTrip = rules.parse('when kind = image -> /Rides/{trip}/{camera}');
+  check('{trip} substitutes plainly when not gated by a trip= condition',
+    rules.destinationFor(anyTrip, { kind: 'image', trip: 'Ladakh_Run', cameraModel: 'X', capturedAt: at }, () => null)
+      === '/Rides/Ladakh_Run/X');
+  check('{trip} falls back to "Unsorted" for a file with no approved trip yet — an honest fallback, not a silent one',
+    rules.destinationFor(anyTrip, { kind: 'image', trip: null, cameraModel: 'X', capturedAt: at }, () => null)
+      === '/Rides/Unsorted/X');
+
+  // A trip label could in principle be anything (Ghost Mode proposes it, a
+  // human approves it) — untrusted text becoming a folder name gets the same
+  // safeName() guard {camera}/{make}/{model} already have.
+  const hostileTrip = rules.destinationFor(
+    anyTrip, { kind: 'image', trip: '../../escaped', cameraModel: 'X', capturedAt: at }, () => null,
+  );
+  check('a crafted trip label cannot inject path separators into the destination',
+    !hostileTrip.includes('..'), hostileTrip);
+}
+
 // --- a destination is stored canonically, so it cannot mean two things -----
 // A destination is a library path, but lib/sort-engine.js turns it into a
 // real one with path.join(library, ...segments) — and path.join has no

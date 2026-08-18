@@ -457,6 +457,14 @@ try {
       db.approvedCorrectionFor('DJI', 'FC3582', '2026-09-01') === null);
     check('and never applies to a different camera model',
       db.approvedCorrectionFor('DJI', 'Osmo Action 4', '2026-08-02') === null);
+    // A plain file object with no cameraMake/cameraModel property at all
+    // (as opposed to one explicitly set to null) has `undefined` there —
+    // node:sqlite's parameter binding throws on `undefined` rather than
+    // treating it as SQL NULL, unlike every other optional field here.
+    check('undefined camera fields (an absent property, not an explicit null) do not throw',
+      (() => {
+        try { return db.approvedCorrectionFor(undefined, undefined, '2026-08-02') === null; } catch { return false; }
+      })());
 
     db.upsertContentTags('hash-a', 'moondream2', ['tent', 'motorcycle', 'campfire']);
     check('content tags round-trip as a real array, not a JSON string',
