@@ -31,6 +31,7 @@ the internet without port forwarding.
 | L | Sorting rules, versioned in git | **Done** |
 | M | Instructions in plain language | **Done** (grammar/plumbing tested; real-model quality unverified here) |
 | N | Content search — the fuzzy cases | **Done** (CPU-verified end to end; GPU and packaged-install unverified here) |
+| O | The assistant — tools, graduated trust, trips | Planned, not started |
 
 Phases A–G made one machine's library good and let machines reach each other.
 H–N are a different goal: **one searchable space across every device and
@@ -1352,6 +1353,149 @@ installer was not rebuilt and exercised in this environment. Separately,
 `@huggingface/transformers`) and verified in isolation, on its own commit,
 before any Phase N code landed on top of it — the full suite passed
 unchanged, including `media.mjs`.
+
+---
+
+# Phase O — The assistant
+
+Not started. This is the phase that turns LANShare from a tool you drive into
+one you talk to: it should **do, recommend and arrange**, learn your habits,
+and ask when it does not understand rather than guessing.
+
+## The honest framing
+
+"As good as a human" is not reachable from an 8B model on a 6 GB card, and
+pretending otherwise would set this up to disappoint. But that matters far
+less than it sounds, because **most of the intelligence should not come from
+the model at all.**
+
+"Group these into trips" is a clustering problem. Deterministic code does it
+better than any language model, is instant, is testable, and cannot
+hallucinate a trip that never happened. The model's only real job is
+understanding what you *meant* and choosing what to run. Getting that split
+right is worth more than any amount of model size — and it is the same
+principle every AI-touching phase here has already followed: **the model
+drafts, a person approves, tested code executes.**
+
+Phase M proved the cost of getting the split wrong from the other side: the
+drafter answered "organise by trip, then day, then camera" with
+`/Rides/{year}/{month}/Videos` — not because the model was weak, but because
+the rule language could not express "camera" at all. A better model would
+have failed identically. Widening what the system can *say* beat any amount
+of model quality, and probably will again.
+
+## What "learning" will and will not mean
+
+No weights are trained. Nothing is fine-tuned. What is built instead:
+
+- **Accepted-rule memory.** Every rule accepted, and every draft edited
+  before accepting, is stored with the instruction that produced it. Later
+  prompts carry the closest few as examples. This adapts to one person's
+  vocabulary within days ("ride" meaning what *you* mean by it) at a
+  fraction of fine-tuning's cost, and it degrades gracefully — a bad example
+  is deletable, where a bad fine-tune is a retrain.
+- **Correction memory.** A draft you rewrite is a stronger signal than one
+  you accept; both are kept, the correction weighted higher.
+
+Stated plainly so nobody later reads "learns" as more than it is: this is
+retrieval-augmented prompting over your own history. It genuinely improves
+output. It is not the model getting smarter.
+
+## Model: local by default, cloud on demand
+
+**Hermes 3 8B** (`hermes3:8b`, ~4.7 GB at Q4) is the local default rather
+than a generic instruct model, because this phase is function calling, not
+prose — Hermes is Nous Research's Llama-3.1 fine-tune trained specifically
+for tool use and structured output. Verified available on Ollama and within
+the 6144 MiB this machine has.
+
+A cloud backend sits behind a deliberate, per-request "think harder" action
+rather than being the default. That keeps the project's standing
+no-external-credential promise true for everyday use, while admitting the
+honest truth that hard instructions want a stronger model. Both backends
+implement one interface, so neither is load-bearing for the other.
+
+**What leaves the machine on a cloud call must be stated in the UI at the
+moment of the call** — file names, camera fields and paths, never file
+contents. Anything less is a privacy surprise.
+
+## The tool layer is the actual design
+
+The assistant is a **tool-calling loop**, not a chatbot that emits prose.
+The model chooses a tool and fills its arguments; every tool is ordinary
+tested code. Splitting them by blast radius is what makes graduated trust
+possible at all:
+
+| Read-only — always safe to run | Writes — trust-gated |
+|---|---|
+| `search_library` | `save_rule` |
+| `describe_library` (counts, cameras, date span, what is unsorted) | `apply_rules` |
+| `detect_trips` | `run_once` |
+| `preview_rule` (dry run) | `import_from_card` |
+| `list_rules` / `list_trips` | |
+
+`undo_last` is always allowed regardless of trust: an escape hatch that
+needs permission is not an escape hatch.
+
+`ask_user(question, options)` is also a tool. That is how "ask me when it is
+not clear" becomes real rather than aspirational — an uncertain model has
+somewhere to go that is not guessing.
+
+## Graduated trust
+
+Trust is **per action type**, earned, and always visible:
+
+1. Everything writeable starts at **ask** — preview, you approve.
+2. After N approvals of the same action with no undo, it offers to promote
+   that one action to **auto**. Approving rule application never implies
+   permission to import or delete.
+3. A Trust screen lists what is automatic, with one-click revert, and any
+   undo immediately demotes that action back to **ask** — undoing is the
+   clearest possible signal that trust was premature.
+
+Every automatic action is written to an audit log with what ran, why, and
+what moved. "It arranged things while I was out" is only acceptable if
+"what exactly did it do" has an exact answer.
+
+## Trips, which need no AI at all
+
+The thing that actually blocked real use. Deterministic:
+
+- Sort by capture time; start a new cluster when the gap exceeds ~12 hours
+  **or** the location jumps beyond ~50 km.
+- Each cluster is a candidate trip; reverse-geocode its centroid (Phase L's
+  geocoder, already built) to suggest a name.
+- You confirm or rename; the trip is stored with its date range and centre.
+- Rules gain a `trip` field and a `{trip}` placeholder, so
+  `-> /Rides/{trip}/{year}-{month}-{day}/{camera}` becomes one rule for
+  everything, which is what was asked for originally.
+
+## Order of work
+
+Each lands useful alone; none requires the next.
+
+- **O1 — Trips + rule memory.** Clustering, the `{trip}` placeholder, the
+  accepted/corrected rule store. Fixes the real blocker with zero AI risk.
+- **O2 — Tool layer + trust.** The tool inventory, trust levels, promotion
+  and demotion, audit log. All testable without a model in the loop.
+- **O3 — The loop.** Hermes 3 backend, tool calling, `ask_user`, memory fed
+  into prompts. The first point it behaves like an assistant.
+- **O4 — Chat UI.** Conversation panel in the desktop app, then the gallery.
+- **O5 — Cloud on demand.** Second backend, "think harder", the disclosure UI.
+
+## Risks, stated plainly
+
+- **An 8B model will pick the wrong tool sometimes.** Mitigated structurally,
+  not by hoping: reads are harmless, writes preview, trust is earned per
+  action, everything undoes. This is why the tool split exists.
+- **Context is finite.** A library of 50,000 files cannot be described to a
+  model. Tools query and summarise; the library is never dumped into the
+  prompt.
+- **Trust automation is the risky part of this phase**, in the same way
+  two-way sync was of Phase D. Demote-on-undo, the audit log, and per-action
+  granularity are the mitigations, and none of them is optional.
+- **"Learns" will be over-read** by anyone who did not read this section.
+  Worth repeating wherever it is described in the UI.
 
 ---
 
