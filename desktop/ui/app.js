@@ -1593,7 +1593,19 @@ function stopCaptureCountdown() {
 function showCaptureState(which) {
   $('capturePrompt').hidden = which !== 'prompt';
   $('captureProgress').hidden = which !== 'progress';
+  $('captureFailed').hidden = which !== 'failed';
   $('captureDone').hidden = which !== 'done';
+}
+
+/**
+ * A failed import is a state with a way out, not an error message left on
+ * the progress screen. Progress has no buttons on purpose — there is
+ * nothing to decide while files are copying — so reusing it for a failure
+ * stranded people on a full-screen overlay with nothing to click at all.
+ */
+function showCaptureFailure(message) {
+  showCaptureState('failed');
+  $('captureFailedNote').textContent = message || 'The import did not finish.';
 }
 
 function renderCapturePrompt(detected) {
@@ -1626,7 +1638,7 @@ async function runCaptureImport() {
   try {
     const result = await window.lanshare.capture.importNow();
     if (!result.ok) {
-      $('captureProgressNote').textContent = result.error;
+      showCaptureFailure(result.error);
       return;
     }
     showCaptureState('done');
@@ -1637,12 +1649,16 @@ async function runCaptureImport() {
     $('captureDoneNote').textContent = `Imported ${result.copied} `
       + `file${result.copied === 1 ? '' : 's'} into "${result.destDir}"${failedNote}.${sortedNote}`;
   } catch (err) {
-    showCaptureState('progress');
-    $('captureProgressNote').textContent = err.message;
+    showCaptureFailure(err.message);
   }
 }
 
 $('captureImportBtn').addEventListener('click', () => runCaptureImport());
+$('captureRetryBtn').addEventListener('click', () => runCaptureImport());
+
+// Closing after a failure leaves the card pending rather than dismissing it:
+// the import did not happen, so the next check should still offer it.
+$('captureFailedCloseBtn').addEventListener('click', () => { $('captureOverlay').hidden = true; });
 
 $('captureCancelBtn').addEventListener('click', async () => {
   stopCaptureCountdown();

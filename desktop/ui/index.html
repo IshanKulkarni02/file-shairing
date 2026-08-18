@@ -98,6 +98,18 @@
       <p class="panel__sub" id="captureProgressNote"></p>
     </div>
 
+    <!-- A failed import is its own state, not the progress one with the text
+         swapped: progress deliberately has no buttons (there is nothing to
+         decide while copying), which left a failure showing an error on a
+         full-screen overlay with nothing to click and no way back. -->
+    <div id="captureFailed" hidden>
+      <p class="field__error is-shown" id="captureFailedNote" style="margin:0 0 1rem"></p>
+      <div class="setup__footer" style="display:flex;flex-direction:column;gap:.6rem">
+        <button class="btn btn--primary btn--full" id="captureRetryBtn">Try again</button>
+        <button class="btn btn--full" id="captureFailedCloseBtn">Close</button>
+      </div>
+    </div>
+
     <div id="captureDone" hidden>
       <p class="panel__sub" id="captureDoneNote" style="margin:0 0 1rem"></p>
       <div class="setup__footer">
