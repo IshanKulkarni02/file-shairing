@@ -266,6 +266,55 @@ check('a file with no camera metadata at all gets no destination', rules.destina
   }
 }
 
+// --- {camera}, {make}, {model} ---------------------------------------------
+// Without these, "by trip, then day, then camera" needs one rule per trip per
+// camera. They also matter for the specific case they were added for: a DJI
+// drone and a DJI action camera both report make "DJI", so only the model
+// tells them apart.
+
+{
+  const rule = rules.parse('when kind = image -> /Rides/{year}-{month}-{day}/{camera}');
+  const at = '2026-03-15T10:00:00';
+
+  check('{camera} uses the model, which is what separates two cameras from one maker',
+    rules.destinationFor(rule, { kind: 'image', cameraMake: 'DJI', cameraModel: 'FC3582', capturedAt: at }, () => null)
+      === '/Rides/2026-03-15/FC3582');
+  check('{camera} falls back to the make when there is no model',
+    rules.destinationFor(rule, { kind: 'image', cameraMake: 'DJI', cameraModel: null, capturedAt: at }, () => null)
+      === '/Rides/2026-03-15/DJI');
+  check('{camera} says so plainly when the file carries neither',
+    rules.destinationFor(rule, { kind: 'image', cameraMake: null, cameraModel: null, capturedAt: at }, () => null)
+      === '/Rides/2026-03-15/Unknown camera');
+
+  const split = rules.parse('when kind = image -> /By/{make}/{model}');
+  check('{make} and {model} are available separately',
+    rules.destinationFor(split, { kind: 'image', cameraMake: 'Apple', cameraModel: 'iPhone 15 Pro', capturedAt: at }, () => null)
+      === '/By/Apple/iPhone 15 Pro');
+
+  // EXIF comes from an uploaded file, so a camera name is untrusted text on
+  // its way to becoming a folder name.
+  const hostile = rules.destinationFor(
+    rule,
+    { kind: 'image', cameraMake: 'DJI', cameraModel: '../../escaped', capturedAt: at },
+    () => null,
+  );
+  check('a crafted camera model cannot inject path separators into the destination',
+    !hostile.includes('..') && hostile === '/Rides/2026-03-15/DJI', hostile);
+
+  const nulByte = rules.destinationFor(
+    rule,
+    { kind: 'image', cameraMake: 'X/Y', cameraModel: null, capturedAt: at },
+    () => null,
+  );
+  check('a slash in a camera make cannot add a folder level either',
+    nulByte.split('/').length === 4, nulByte);
+
+  check('an unknown placeholder is still refused at parse time',
+    (() => {
+      try { rules.parse('when kind = image -> /X/{lens}'); return false; } catch { return true; }
+    })());
+}
+
 // --- a destination is stored canonically, so it cannot mean two things -----
 // A destination is a library path, but lib/sort-engine.js turns it into a
 // real one with path.join(library, ...segments) — and path.join has no
