@@ -55,6 +55,7 @@ const SUITES = [
   { name: 'vault', file: 'vault.mjs', kind: 'plain' },
   { name: 'vaults', file: 'vaults.mjs', kind: 'plain' },
   { name: 'migration', file: 'migration.mjs', kind: 'plain' },
+  { name: 'config', file: 'config.mjs', kind: 'plain' },
   { name: 'e2e-crypto', file: 'e2e-crypto.mjs', kind: 'plain' },
   { name: 'metadata', file: 'metadata.mjs', kind: 'plain' },
   { name: 'metadata-fuzz', file: 'metadata-fuzz.mjs', kind: 'plain' },
