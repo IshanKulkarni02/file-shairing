@@ -70,6 +70,7 @@ const SUITES = [
   { name: 'geocode', file: 'geocode.mjs', kind: 'plain' },
   { name: 'sort-engine', file: 'sort-engine.mjs', kind: 'plain' },
   { name: 'trip-clustering', file: 'trip-clustering.mjs', kind: 'plain' },
+  { name: 'pattern-discovery', file: 'pattern-discovery.mjs', kind: 'plain' },
   { name: 'nl-rules', file: 'nl-rules.mjs', kind: 'plain' },
   { name: 'content-index', file: 'content-index.mjs', kind: 'plain' },
   { name: 'clip', file: 'clip.mjs', kind: 'plain', slow: true },

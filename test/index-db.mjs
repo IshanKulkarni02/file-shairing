@@ -489,10 +489,10 @@ try {
     db.upsert(entry({ relPath: '/dated.jpg', hash: 'hash-dated', capturedAt: '2026-08-01T10:00:00.000Z' }));
     db.upsert(entry({ relPath: '/no-date.jpg', hash: 'hash-nodate', capturedAt: null }));
     const clusterable = db.filesForClustering();
-    check('filesForClustering includes hashed, dated files',
-      clusterable.some((f) => f.rel_path === '/dated.jpg'));
+    check('filesForClustering includes hashed, dated files, mapped through dbRowToResult like every other reader',
+      clusterable.some((f) => f.path === '/dated.jpg' && f.hash === 'hash-dated'));
     check('and excludes files with no capture time at all — nothing to cluster them by',
-      !clusterable.some((f) => f.rel_path === '/no-date.jpg'));
+      !clusterable.some((f) => f.path === '/no-date.jpg'));
 
     db.close();
   }
