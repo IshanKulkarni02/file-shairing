@@ -54,6 +54,48 @@ try {
     check('pixel height is read', m.pixelHeight === 3000, m.pixelHeight);
   }
 
+  // --- GPS's own UTC clock (GPSDateStamp/GPSTimeStamp), separate from the ---
+  // --- camera's local-time DateTimeOriginal -----------------------------------
+
+  {
+    const buf = realisticJpeg({
+      dateTimeOriginal: '2026:08:11 16:00:00', // the camera's local clock
+      lat: 32.234333, latRef: 'N', lon: 77.187333, lonRef: 'E',
+      gpsDateStamp: '2026:08:11', gpsTimeStamp: [10, 30, 0], // GPS's own UTC clock
+    });
+    const m = metadata.parseJpegExif(buf);
+    check('a GPS fix with a time stamp produces a UTC instant',
+      m.gpsDateTimeUTC === '2026-08-11T10:30:00Z', m.gpsDateTimeUTC);
+  }
+  {
+    const buf = realisticJpeg({
+      dateTimeOriginal: '2026:08:11 16:00:00',
+      lat: 32.234333, latRef: 'N', lon: 77.187333, lonRef: 'E',
+    });
+    const m = metadata.parseJpegExif(buf);
+    check('a GPS fix with no time stamp leaves gpsDateTimeUTC null, not a guess',
+      m.gpsDateTimeUTC === null, m.gpsDateTimeUTC);
+  }
+  {
+    const buf = realisticJpeg({ dateTimeOriginal: '2026:08:11 16:00:00' });
+    const m = metadata.parseJpegExif(buf);
+    check('no GPS fix at all also leaves gpsDateTimeUTC null',
+      m.gpsDateTimeUTC === null, m.gpsDateTimeUTC);
+  }
+  {
+    // A malformed GPSDateStamp (wrong shape) must degrade to null, not throw
+    // and not produce a plausible-looking but wrong instant.
+    const buf = realisticJpeg({
+      lat: 1, latRef: 'N', lon: 1, lonRef: 'E',
+      gpsDateStamp: 'not-a-date', gpsTimeStamp: [10, 30, 0],
+    });
+    let threw = false;
+    let m = null;
+    try { m = metadata.parseJpegExif(buf); } catch { threw = true; }
+    check('a malformed GPSDateStamp does not throw and yields no UTC instant',
+      !threw && m.gpsDateTimeUTC === null, JSON.stringify(m));
+  }
+
   // --- every GPS quadrant ----------------------------------------------------
 
   {
@@ -253,7 +295,8 @@ try {
       if (existsSync(h264)) {
         const meta = await metadata.probeVideoMetadata(h264);
         check('probing a real video does not throw and returns a shape',
-          'dateTimeOriginal' in meta && 'gpsLatitude' in meta, JSON.stringify(meta));
+          'dateTimeOriginal' in meta && 'gpsLatitude' in meta
+          && 'cameraMake' in meta && 'cameraModel' in meta, JSON.stringify(meta));
       } else {
         console.log('  --   video sample not found; run `node test/make-samples.mjs` first — skipping');
       }
@@ -263,7 +306,8 @@ try {
 
     const missing = await metadata.probeVideoMetadata(path.join(here, 'this-file-does-not-exist.mp4'));
     check('probing a file that does not exist degrades cleanly rather than throwing',
-      missing.dateTimeOriginal === null && missing.gpsLatitude === null, JSON.stringify(missing));
+      missing.dateTimeOriginal === null && missing.gpsLatitude === null
+      && missing.cameraMake === null && missing.cameraModel === null, JSON.stringify(missing));
   }
 } catch (err) {
   fail++;
