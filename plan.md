@@ -31,7 +31,7 @@ the internet without port forwarding.
 | L | Sorting rules, versioned in git | **Done** |
 | M | Instructions in plain language | **Done** (grammar/plumbing tested; real-model quality unverified here) |
 | N | Content search — the fuzzy cases | **Done** (CPU-verified end to end; GPU and packaged-install unverified here) |
-| O | The assistant — tools, graduated trust, trips | Planned, not started |
+| O | The assistant — tools, graduated trust, trips | O1 **Done** (Adaptive Pattern Engine); O2–O5 not started |
 
 Phases A–G made one machine's library good and let machines reach each other.
 H–N are a different goal: **one searchable space across every device and
@@ -1520,30 +1520,121 @@ Every automatic action is written to an audit log with what ran, why, and
 what moved. "It arranged things while I was out" is only acceptable if
 "what exactly did it do" has an exact answer.
 
-## Trips, which need no AI at all
+## O1 — The Adaptive Pattern Engine (shipped)
 
-The thing that actually blocked real use. Deterministic:
+This grew well past "trips need no AI at all." The original sketch — a flat
+~12h/50km cluster boundary — was elevated at your request into a real
+pattern-recognition engine for multi-day, multi-camera motovlogging trips:
+adaptive burst clustering, GPS anchoring across cameras, per-camera
+clock-drift correction, VLM-tag semantic bridging across ambiguous gaps, and
+a Ghost Mode review loop that proposes structured (AST) rules rather than
+acting on its own. The elevated design was stress-tested by a Plan agent
+before any of it was built, which caught real problems worth recording here
+rather than letting them stay implicit in the code:
 
-- Sort by capture time; start a new cluster when the gap exceeds ~12 hours
-  **or** the location jumps beyond ~50 km.
-- Each cluster is a candidate trip; reverse-geocode its centroid (Phase L's
-  geocoder, already built) to suggest a name.
-- You confirm or rename; the trip is stored with its date range and centre.
-- Rules gain a `trip` field and a `{trip}` placeholder, so
-  `-> /Rides/{trip}/{year}-{month}-{day}/{camera}` becomes one rule for
-  everything, which is what was asked for originally.
+- **`captured_at` mixed two clock bases** — naive local time for photos,
+  genuine UTC for video — which would have made drift detection "discover"
+  nothing but ordinary timezone offset. Fixed first, as its own step:
+  `captured_at_basis` (`'utc'` / `'utc-gps'` / `'local-naive'`), using a
+  photo's own GPS fix timestamp (GPSDateStamp/GPSTimeStamp — genuinely UTC,
+  independent of the camera's local clock) as the trustworthy anchor when
+  present.
+- **Video files never got `camera_make`/`camera_model`** — blocking the
+  camera-model-keyed drift correction this phase exists for, for exactly the
+  video-first device class (drone, action cam) it targets. Fixed alongside.
+- **My own draft's schema was wrong.** A `trip` column (and inferred GPS
+  columns) directly on `files` would have been silently wiped the instant a
+  trip-triggered rule moved the file — `lib/indexer.js` deletes and
+  reinserts a file's row on every move, never updates it in place. Every
+  piece of machine-derived data here is hash-keyed instead, mirroring
+  `content_embeddings`'s already-proven precedent, and resolved fresh at
+  evaluation time (`tripFor()`, `correctedCapturedAt()` in
+  `lib/sort-engine.js`) the same way `resolvedGeocoder()` already resolves
+  "gps near" clauses.
+- **Reverse-geocoding was not "already built."** `lib/geocode.js` was
+  forward-only; a genuinely new `reverseGeocode()` was needed.
+
+**Clustering.** `lib/trip-clustering.js`'s `detectBursts()` pools every
+camera's timestamps into one chronological sequence and finds a boundary
+where the gap exceeds `max(minGapMs, k × runningMean)` — a self-relative
+threshold (Welford's-style running mean, seeded from the *median* gap
+rather than the first one seen, since a first-gap seed can be poisoned by
+one early large gap into merging genuinely separate events) rather than one
+fixed number. `interpolateLocations()` anchors a non-GPS camera's shots from
+its nearest GPS-bearing neighbours *before and after* in time — never a
+one-sided guess — gated by an implied-speed sanity check
+(distance ÷ elapsed time against a plausible ground-transport ceiling)
+rather than a flat distance cap, which alone cannot catch "close in km but
+unreachable in the time window."
+
+**Clock drift.** `estimateDrift()` proposes a per-camera offset only when a
+dual bar clears: enough mutually-consistent evidence, *and* that evidence
+not cherry-picked from a much larger noisy pool — measured only against
+GPS-fix-verified baseline shots, never another camera's own possibly-wrong
+clock. Applied as an index-only overlay at evaluation time, never written
+back into a file's EXIF — the same "never mutate the source" rule this app
+has followed from the start, extended to a derived value. Per your answer,
+an approved correction can graduate to full trust like any other action
+type; the dual-bar evidence check gates whether a correction is *proposed*
+at all, independent of how much trust has been earned.
+
+**Semantic bridging.** For a boundary the burst detector finds genuinely
+ambiguous (its gap sits within roughly half to one-and-a-half times the
+threshold that decided it — not clearly a boundary, not clearly not one),
+Discovery checks whether the two bracketing files' visual tags share a
+recurring term ("tent", "Himalayan 450"). Tags are read from `content_tags`
+first (mirroring `content_embeddings`'s hash-keyed shape); per your answer,
+Discovery may also call a live VLM for just those bracketing files, capped
+per run, rather than only ever reading tags computed at import time — so
+the honest framing is that trips need *no AI* for the common case, and a
+small, bounded, occasional local-model call for a boundary that's genuinely
+unclear otherwise, not a hard guarantee against AI ever running.
+
+**Ghost Mode.** `lib/pattern-discovery.js`'s `runDiscoveryPass()` reads the
+whole library, clusters it, and writes one `rule_proposals` row per finding
+— structured JSON (an AST), never DSL text a parser has to rescue, matching
+the "structured output" principle above. Re-running is idempotent: a
+still-pending or already-rejected candidate is not re-proposed. Per your
+answer, a new file landing inside an *already-approved* trip's own envelope
+(camera, capture time, and — with a buffer generous enough to absorb
+ordinary GPS noise — location) auto-attaches directly, no new proposal.
+Approving a proposal is just another editor of the saved rules file, going
+through the exact same `rulesVersion()`/`RulesConflictError` concurrency
+check a human edit already uses.
+
+Named `lib/pattern-discovery.js`, not `lib/discovery.js` — that name
+already belongs to mDNS LAN host discovery, an unrelated module.
+
+**What O1 does not yet do:** wire a real Moondream2 call behind the
+semantic-bridge tie-break (the decision logic and the `content_tags`
+storage are real and tested; `tagImage` is a pluggable function, not yet
+pointed at Ollama); detect that a re-clustering looks like it should
+*split* an already-approved trip (the schema's `supersedesId` fully
+supports this, but nothing yet triggers it automatically — approving a
+supersession today would need a proposal created by hand, or a future
+pass); or any review UI beyond the admin JSON API
+(`/api/pattern-engine/*`) — a desktop/gallery screen for the queue is
+natural O1.5/O2 work, not built here.
 
 ## Order of work
 
 Each lands useful alone; none requires the next.
 
-- **O1 — Trips + rule memory.** Clustering, the `{trip}` placeholder, the
-  accepted/corrected rule store. Fixes the real blocker with zero AI risk.
-- **O2 — Tool layer + trust.** The tool inventory, trust levels, promotion
-  and demotion, audit log. All testable without a model in the loop.
+- **O1 — The Adaptive Pattern Engine.** Shipped, per the section above:
+  clustering, GPS anchoring, clock-drift correction, semantic bridging, and
+  the Ghost Mode proposal queue with admin routes. Already covers a slice of
+  what O2 below describes (two action types — `trip_cluster` and
+  `camera_correction` — flowing through Ghost Mode into the graduated-trust
+  ladder), not the whole of it.
+- **O2 — Tool layer + trust.** The general tool inventory, trust levels
+  applied uniformly across every action type (not just the two O1 adds),
+  promotion and demotion, audit log. All testable without a model in the
+  loop.
 - **O3 — The loop.** Hermes 3 backend, tool calling, `ask_user`, memory fed
   into prompts. The first point it behaves like an assistant.
-- **O4 — Chat UI.** Conversation panel in the desktop app, then the gallery.
+- **O4 — Chat UI.** Conversation panel in the desktop app, then the gallery
+  — including a proper review screen for the Ghost Mode queue O1 built the
+  routes for.
 - **O5 — Cloud on demand.** Second backend, "think harder", the disclosure UI.
 
 ## Concurrent writers: correctness first, realtime second
