@@ -130,6 +130,8 @@ try {
       });
       check('a write tool at the default (ask) trust only produces a preview',
         result.toolLog[0].ranFor === 'preview' && result.toolLog[0].trustLevel === 'ask', JSON.stringify(result.toolLog));
+      check('the tool log carries the original arguments alongside the result — a caller needs to see what was actually asked for',
+        result.toolLog[0].args?.text === 'when kind = image -> /Photos', JSON.stringify(result.toolLog[0]));
       const sortRules = require(path.join(here, '..', 'lib', 'sort-rules.js'));
       check('nothing was actually saved', sortRules.readRulesText(library) === '');
       check('the model\'s follow-up reply is still returned normally', result.reply.includes('previewed'));

@@ -89,6 +89,7 @@ const SUITES = [
   { name: 'sort-rules-routes', file: 'sort-rules-routes.mjs', kind: 'server' },
   { name: 'pattern-engine-routes', file: 'pattern-engine-routes.mjs', kind: 'server' },
   { name: 'trust-routes', file: 'trust-routes.mjs', kind: 'server' },
+  { name: 'assistant-routes', file: 'assistant-routes.mjs', kind: 'server' },
   { name: 'content-search-routes', file: 'content-search-routes.mjs', kind: 'server', slow: true },
   { name: 'federation-routes', file: 'federation-routes.mjs', kind: 'plain' },
   { name: 'central-index-routes', file: 'central-index-routes.mjs', kind: 'plain' },
