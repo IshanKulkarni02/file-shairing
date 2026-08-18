@@ -58,6 +58,12 @@ try {
       schemas.every((s) => s.type === 'function' && s.function.name && s.function.description && s.function.parameters));
     check('read and write tools are both present',
       schemas.some((s) => s.function.name === 'search_library') && schemas.some((s) => s.function.name === 'save_rule'));
+    check('ask_user is part of the schema the model sees',
+      schemas.some((s) => s.function.name === 'ask_user'));
+
+    let threw = false;
+    try { await tools.invokeTool('ask_user', { question: 'Which trip?' }, {}, 'auto'); } catch (err) { threw = err instanceof tools.AssistantToolError; }
+    check('ask_user cannot be invoked as an ordinary tool — the conversation loop must intercept it first', threw);
   }
 
   // --- read tools always just run -------------------------------------------

@@ -58,6 +58,7 @@ const SUITES = [
   { name: 'config', file: 'config.mjs', kind: 'plain' },
   { name: 'trust', file: 'trust.mjs', kind: 'plain' },
   { name: 'assistant-tools', file: 'assistant-tools.mjs', kind: 'plain' },
+  { name: 'assistant', file: 'assistant.mjs', kind: 'plain' },
   { name: 'e2e-crypto', file: 'e2e-crypto.mjs', kind: 'plain' },
   { name: 'metadata', file: 'metadata.mjs', kind: 'plain' },
   { name: 'metadata-fuzz', file: 'metadata-fuzz.mjs', kind: 'plain' },
