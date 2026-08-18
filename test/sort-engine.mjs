@@ -17,6 +17,7 @@ const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const engine = require(path.join(here, '..', 'lib', 'sort-engine.js'));
 const sortRules = require(path.join(here, '..', 'lib', 'sort-rules.js'));
+const { IndexDb } = require(path.join(here, '..', 'lib', 'index-db.js'));
 
 let pass = 0;
 let fail = 0;
@@ -243,6 +244,100 @@ function putFile(library, relPath, content = 'x') {
   } finally {
     rmSync(library, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+  }
+}
+
+// --- Phase O1: trip and clock-drift resolution, via a real IndexDb ---------
+// plan()'s `db` option is what makes {trip}/"when trip = ..." and drift
+// correction actually work end to end — tripFor() and correctedCapturedAt()
+// mirror resolvedGeocoder()'s shape (lib/sort-engine.js), resolved fresh
+// from the index rather than stored anywhere, so this exercises the whole
+// path: an approved trip_clusters/camera_corrections row in a real database
+// through to the destination plan() actually produces.
+
+{
+  const library = scratchLibrary();
+  const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+  try {
+    sortRules.saveRulesText(library, 'when trip = "Motocamping_Nov" -> /Rides/{trip}/{camera}');
+    putFile(library, '/Inbox/trip.jpg');
+    putFile(library, '/Inbox/no-trip.jpg');
+
+    db.createTripCluster({
+      id: 'c1', label: 'Motocamping_Nov', status: 'proposed',
+      startsAt: '2026-11-01T00:00:00Z', endsAt: '2026-11-04T00:00:00Z',
+      cameraSet: ['DJI FC3582'],
+    });
+    db.addTripClusterMember('c1', 'hash-trip', 'time-density');
+
+    const entries = [
+      { path: '/Inbox/trip.jpg', name: 'trip.jpg', hash: 'hash-trip', cameraModel: 'FC3582', capturedAt: '2026-11-02T00:00:00' },
+      { path: '/Inbox/no-trip.jpg', name: 'no-trip.jpg', hash: 'hash-other', cameraModel: 'FC3582', capturedAt: '2026-11-02T00:00:00' },
+    ];
+
+    const beforeApproval = await engine.plan({ library, entries, db });
+    check('a file in a cluster that is only proposed, not yet approved, does not match a trip= rule',
+      !beforeApproval.moves.some((m) => m.path === '/Inbox/trip.jpg'), JSON.stringify(beforeApproval));
+
+    db.setTripClusterStatus('c1', 'approved');
+    const afterApproval = await engine.plan({ library, entries, db });
+    check('once the cluster is approved, the file resolves to its trip and the rule matches',
+      afterApproval.moves.some((m) => m.path === '/Inbox/trip.jpg' && m.destinationAlbum === '/Rides/Motocamping_Nov/FC3582'),
+      JSON.stringify(afterApproval.moves));
+    check('a file never added to any cluster still does not match, even after the other one is approved',
+      !afterApproval.moves.some((m) => m.path === '/Inbox/no-trip.jpg'), JSON.stringify(afterApproval.moves));
+
+    check('plan() without a db option at all still works exactly as before — trips just never match',
+      (await engine.plan({ library, entries })).moves.length === 0);
+  } finally {
+    db.close();
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const library = scratchLibrary();
+  const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+  try {
+    // "date =" matches a *local* calendar day (see sort-rules.js's
+    // capturedDateOnly), so the corrected day is computed the same way here
+    // — with local Date methods — rather than hardcoded, so this test is
+    // correct under whatever timezone actually runs it. The 25-hour offset
+    // (deliberately more than a full day) guarantees the local calendar date
+    // advances by at least one regardless of timezone or DST, so raw and
+    // corrected can never accidentally land on the same local day.
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const localDateOf = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const rawInstant = new Date('2026-08-01T12:00:00.000Z'); // noon UTC — comfortably mid-day anywhere
+    const offsetSeconds = 25 * 3600;
+    const correctedInstant = new Date(rawInstant.getTime() + offsetSeconds * 1000);
+    const correctedDate = localDateOf(correctedInstant);
+
+    sortRules.saveRulesText(library, `when kind = image and date = "${correctedDate}" -> /Corrected`);
+    putFile(library, '/Inbox/drift.jpg');
+
+    db.createCameraCorrection({
+      id: 'corr1', cameraMake: 'DJI', cameraModel: 'FC3582', offsetSeconds,
+      effectiveFrom: '2026-08-01T00:00:00.000Z', effectiveTo: '2026-08-01T23:59:59.000Z',
+      status: 'approved', evidenceCount: 6, sampleCount: 12,
+    });
+
+    const entries = [{
+      path: '/Inbox/drift.jpg', name: 'drift.jpg', kind: 'image',
+      cameraMake: 'DJI', cameraModel: 'FC3582', capturedAt: rawInstant.toISOString(),
+    }];
+
+    const result = await engine.plan({ library, entries, db });
+    check('a file from a drifting camera is matched against its corrected date, not its raw one',
+      result.moves.some((m) => m.path === '/Inbox/drift.jpg' && m.destinationAlbum === '/Corrected'),
+      JSON.stringify(result));
+
+    const noDb = await engine.plan({ library, entries });
+    check('without db, no correction is applied and the raw (uncorrected) date does not match',
+      noDb.moves.length === 0, JSON.stringify(noDb));
+  } finally {
+    db.close();
+    rmSync(library, { recursive: true, force: true });
   }
 }
 

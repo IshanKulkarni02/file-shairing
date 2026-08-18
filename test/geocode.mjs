@@ -191,5 +191,164 @@ function fakeFetch(responses) {
   }
 }
 
+// --- reverseGeocode / reverseGeocodeMany: coordinates -> a place name --------
+// Phase O1's own cache keyspace (rounded coordinates), never shared with the
+// forward place-name cache above.
+
+/** A fake Nominatim reverse endpoint: canned address bodies by rounded lat,lon, and a call log. */
+function fakeReverseFetch(responses) {
+  const calls = [];
+  const fn = async (url) => {
+    calls.push({ url });
+    const u = new URL(url);
+    const key = `${Number(u.searchParams.get('lat')).toFixed(3)},${Number(u.searchParams.get('lon')).toFixed(3)}`;
+    const body = responses[key] ?? {};
+    return { ok: true, json: async () => body };
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+{
+  const library = scratchLibrary();
+  const fetchImpl = fakeReverseFetch({
+    '32.243,77.189': { address: { city: 'Manali', state: 'Himachal Pradesh' }, display_name: 'Manali, Himachal Pradesh, India' },
+  });
+  try {
+    const name = await geocode.reverseGeocode(32.2432, 77.1892, { library, fetchImpl, minIntervalMs: 0 });
+    check('a point the fake service knows reverse-resolves to a settlement name', name === 'Manali', name);
+    check('exactly one network call was made', fetchImpl.calls.length === 1);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const library = scratchLibrary();
+  const fetchImpl = fakeReverseFetch({
+    '32.243,77.189': { address: { county: 'Kullu' }, display_name: 'Kullu District, Himachal Pradesh, India' },
+  });
+  try {
+    const name = await geocode.reverseGeocode(32.2432, 77.1892, { library, fetchImpl, minIntervalMs: 0 });
+    check('with no city/town/village, a broader region name is used instead', name === 'Kullu', name);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const library = scratchLibrary();
+  const fetchImpl = fakeReverseFetch({
+    '32.243,77.189': { display_name: 'Somewhere Remote, Lahaul and Spiti, India' },
+  });
+  try {
+    const name = await geocode.reverseGeocode(32.2432, 77.1892, { library, fetchImpl, minIntervalMs: 0 });
+    check('with no address breakdown at all, the first segment of the full name is used',
+      name === 'Somewhere Remote', name);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const library = scratchLibrary();
+  const fetchImpl = fakeReverseFetch({}); // no address, no display_name
+  try {
+    const name = await geocode.reverseGeocode(1, 1, { library, fetchImpl, minIntervalMs: 0 });
+    check('a completely empty response resolves to null, not an error', name === null);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const library = scratchLibrary();
+  const fetchImpl = fakeReverseFetch({
+    '32.243,77.189': { address: { city: 'Manali' }, display_name: 'Manali, India' },
+  });
+  try {
+    await geocode.reverseGeocode(32.2432, 77.1892, { library, fetchImpl, minIntervalMs: 0 });
+    const second = await geocode.reverseGeocode(32.2432, 77.1892, { library, fetchImpl, minIntervalMs: 0 });
+    check('a second lookup of the same point returns the cached name', second === 'Manali');
+    check('and makes no second network call', fetchImpl.calls.length === 1);
+
+    check('the reverse cache is persisted to its own file, separate from the forward cache',
+      JSON.parse(readFileSync(geocode.reverseCachePath(library), 'utf8'))['32.243,77.189'] === 'Manali');
+
+    // A point close enough to round to the same 3-decimal bucket (~110m)
+    // reuses the same cache entry — the whole point of bucketing rather than
+    // keying on exact floating-point coordinates.
+    const nearby = await geocode.reverseGeocode(32.24321, 77.18919, { library, fetchImpl, minIntervalMs: 0 });
+    check('a point that rounds to the same bucket hits the cache too, not a fresh lookup',
+      nearby === 'Manali' && fetchImpl.calls.length === 1);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const library = scratchLibrary();
+  const fetchImpl = fakeReverseFetch({}); // never resolves
+  try {
+    await geocode.reverseGeocode(5, 5, { library, fetchImpl, minIntervalMs: 0 });
+    const secondFetch = fakeReverseFetch({});
+    await geocode.reverseGeocode(5, 5, { library, fetchImpl: secondFetch, minIntervalMs: 0 });
+    check('an unresolved point is not cached — it gets a real retry next time', secondFetch.calls.length === 1);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const library = scratchLibrary();
+  const throwingFetch = async () => { throw new Error('ECONNREFUSED'); };
+  const name = await geocode.reverseGeocode(1, 1, { library, fetchImpl: throwingFetch, minIntervalMs: 0 });
+  check('a network failure resolves to null rather than throwing', name === null);
+  rmSync(library, { recursive: true, force: true });
+}
+
+{
+  const library = scratchLibrary();
+  const name = await geocode.reverseGeocode(NaN, 77, { library, fetchImpl: fakeReverseFetch({}), minIntervalMs: 0 });
+  check('a non-finite coordinate resolves to null without ever touching the network', name === null);
+  rmSync(library, { recursive: true, force: true });
+}
+
+{
+  const library = scratchLibrary();
+  const fetchImpl = fakeReverseFetch({
+    '32.243,77.189': { address: { city: 'Manali' }, display_name: 'Manali, India' },
+    '34.153,77.577': { address: { city: 'Leh' }, display_name: 'Leh, India' },
+  });
+  try {
+    const names = await geocode.reverseGeocodeMany(
+      [{ lat: 32.2432, lon: 77.1892 }, { lat: 34.1526, lon: 77.5771 }],
+      { library, fetchImpl, minIntervalMs: 0 },
+    );
+    check('reverseGeocodeMany returns one name per point, in order',
+      names[0] === 'Manali' && names[1] === 'Leh', JSON.stringify(names));
+    check('two distinct points cost exactly two network calls', fetchImpl.calls.length === 2);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const library = scratchLibrary();
+  const fetchImpl = fakeReverseFetch({
+    '1.000,1.000': { address: { city: 'A' }, display_name: 'A' },
+    '2.000,2.000': { address: { city: 'B' }, display_name: 'B' },
+  });
+  try {
+    const started = Date.now();
+    await geocode.reverseGeocodeMany([{ lat: 1, lon: 1 }, { lat: 2, lon: 2 }], { library, fetchImpl, minIntervalMs: 150 });
+    const elapsed = Date.now() - started;
+    check('reverse lookups are spaced at least minIntervalMs apart too, honouring the same Nominatim policy',
+      elapsed >= 140, `${elapsed}ms`);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

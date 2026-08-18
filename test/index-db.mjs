@@ -392,6 +392,110 @@ try {
       typeof onlyCopy[0]._score === 'number');
     db.close();
   }
+
+  // --- Phase O1: Adaptive Pattern Engine tables -------------------------------
+  // Every one of these is hash- or id-keyed, never a column on `files`, so a
+  // trip or a correction survives the very file move it causes. See the
+  // SCHEMA comment in lib/index-db.js for why.
+
+  {
+    const db = scratchDb();
+
+    const cluster = db.createTripCluster({
+      id: 'trip-1', status: 'proposed',
+      startsAt: '2026-08-01T00:00:00Z', endsAt: '2026-08-04T00:00:00Z',
+      cameraSet: ['DJI FC3582', 'Apple iPhone'],
+      gpsEnvelope: { latMin: 32, latMax: 33, lonMin: 77, lonMax: 78 },
+    });
+    check('creating a trip cluster returns it with JSON fields already parsed',
+      Array.isArray(cluster.cameraSet) && cluster.gpsEnvelope.latMin === 32, JSON.stringify(cluster));
+    check('and a fresh read back matches', db.getTripCluster('trip-1').status === 'proposed');
+
+    db.addTripClusterMember('trip-1', 'hash-a', 'time-density');
+    db.addTripClusterMember('trip-1', 'hash-b', 'gps-anchor');
+    check('members are recorded with their reason',
+      db.tripClusterMembers('trip-1').some((m) => m.hash === 'hash-a' && m.reason === 'time-density'));
+
+    check('a file resolves to no trip while the cluster is only proposed',
+      db.approvedTripForHash('hash-a') === null);
+    db.setTripClusterStatus('trip-1', 'approved');
+    check('and resolves once the cluster is approved — the resolver lib/sort-engine.js will mirror',
+      db.approvedTripForHash('hash-a')?.id === 'trip-1');
+    check('a hash never added to any cluster resolves to nothing',
+      db.approvedTripForHash('hash-nowhere') === null);
+
+    // Re-clustering supersedes rather than mutating: a second, later cluster
+    // pointing back at the first via supersedesId, with the first cluster's
+    // own row left untouched until the new one is itself approved.
+    const superseding = db.createTripCluster({
+      id: 'trip-1b', status: 'proposed', startsAt: '2026-08-01T00:00:00Z', endsAt: '2026-08-02T00:00:00Z',
+      cameraSet: ['DJI FC3582'], supersedesId: 'trip-1',
+    });
+    check('a superseding cluster records what it supersedes', superseding.supersedesId === 'trip-1');
+    check('the original cluster is untouched until the supersession is itself approved',
+      db.getTripCluster('trip-1').status === 'approved');
+
+    check('listTripClusters filters by status',
+      db.listTripClusters('proposed').length === 1 && db.listTripClusters('approved').length === 1);
+
+    db.upsertInferredLocation('hash-c', 32.5, 77.5, 'gps-interpolation', 0.9);
+    const loc = db.getInferredLocation('hash-c');
+    check('an inferred location round-trips', loc.lat === 32.5 && loc.method === 'gps-interpolation');
+    check('a hash never interpolated has no inferred location', db.getInferredLocation('hash-nope') === null);
+
+    const correction = db.createCameraCorrection({
+      id: 'corr-1', cameraMake: 'DJI', cameraModel: 'FC3582', offsetSeconds: 3600,
+      effectiveFrom: '2026-08-01', effectiveTo: '2026-08-04', status: 'proposed',
+      evidenceCount: 6, sampleCount: 15,
+    });
+    check('a proposed correction is not yet in force',
+      db.approvedCorrectionFor('DJI', 'FC3582', '2026-08-02') === null, correction.id);
+    db.setCameraCorrectionStatus('corr-1', 'approved');
+    check('an approved correction covering the instant is found',
+      db.approvedCorrectionFor('DJI', 'FC3582', '2026-08-02')?.offset_seconds === 3600);
+    check('the same correction does not apply outside its effective range',
+      db.approvedCorrectionFor('DJI', 'FC3582', '2026-09-01') === null);
+    check('and never applies to a different camera model',
+      db.approvedCorrectionFor('DJI', 'Osmo Action 4', '2026-08-02') === null);
+    // A plain file object with no cameraMake/cameraModel property at all
+    // (as opposed to one explicitly set to null) has `undefined` there —
+    // node:sqlite's parameter binding throws on `undefined` rather than
+    // treating it as SQL NULL, unlike every other optional field here.
+    check('undefined camera fields (an absent property, not an explicit null) do not throw',
+      (() => {
+        try { return db.approvedCorrectionFor(undefined, undefined, '2026-08-02') === null; } catch { return false; }
+      })());
+
+    db.upsertContentTags('hash-a', 'moondream2', ['tent', 'motorcycle', 'campfire']);
+    check('content tags round-trip as a real array, not a JSON string',
+      Array.isArray(db.getContentTags('hash-a', 'moondream2'))
+      && db.getContentTags('hash-a', 'moondream2').includes('tent'));
+    check('a hash never tagged under this model returns null — Discovery\'s signal to tag it live, not "no tags"',
+      db.getContentTags('hash-a', 'some-other-model') === null);
+
+    const proposal = db.createProposal({
+      id: 'prop-1', kind: 'trip_cluster', subjectId: 'trip-1b',
+      ast: { type: 'trip_cluster', clusterId: 'trip-1b' }, summary: 'A 3-day cluster across 1 camera',
+    });
+    check('a proposal starts pending', proposal.status === 'pending');
+    check('and carries its AST as a real object', proposal.ast.clusterId === 'trip-1b');
+    check('it shows up in the pending queue', db.listProposals('pending').some((p) => p.id === 'prop-1'));
+    db.setProposalStatus('prop-1', 'approved');
+    check('approving moves it out of pending and into approved',
+      !db.listProposals('pending').some((p) => p.id === 'prop-1')
+      && db.listProposals('approved').some((p) => p.id === 'prop-1'));
+    check('a decidedAt timestamp is stamped on the decision', db.getProposal('prop-1').decidedAt !== null);
+
+    db.upsert(entry({ relPath: '/dated.jpg', hash: 'hash-dated', capturedAt: '2026-08-01T10:00:00.000Z' }));
+    db.upsert(entry({ relPath: '/no-date.jpg', hash: 'hash-nodate', capturedAt: null }));
+    const clusterable = db.filesForClustering();
+    check('filesForClustering includes hashed, dated files, mapped through dbRowToResult like every other reader',
+      clusterable.some((f) => f.path === '/dated.jpg' && f.hash === 'hash-dated'));
+    check('and excludes files with no capture time at all — nothing to cluster them by',
+      !clusterable.some((f) => f.path === '/no-date.jpg'));
+
+    db.close();
+  }
 } catch (err) {
   fail++;
   console.log(`  FAIL  unexpected error -> ${err.stack || err.message}`);
