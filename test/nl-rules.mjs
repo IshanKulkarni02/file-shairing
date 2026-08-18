@@ -152,6 +152,68 @@ const TODAY = new Date('2026-08-11T15:00:00Z');
     rejected instanceof nlRules.NlRulesError);
 }
 
+// --- a model that is not installed: the confusing one --------------------------
+// Ollama answers a request for a model it does not have with 404, which reads
+// exactly like "the server is not running" but happens only when it IS
+// running. Reported from real use: the error said "refused that request (404)"
+// and sent someone off restarting a server that was working perfectly.
+
+{
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    if (url.endsWith('/api/tags')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ models: [{ name: 'llama2:latest' }, { name: 'qwen3:latest' }] }),
+      };
+    }
+    return { ok: false, status: 404, json: async () => ({ error: 'model not found' }) };
+  };
+
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: 'sort my photos', model: 'not-installed:8b', fetchImpl, now: TODAY });
+  } catch (err) {
+    rejected = err;
+  }
+  check('a missing model throws NlRulesError, not a bare status code',
+    rejected instanceof nlRules.NlRulesError, String(rejected));
+  check('the message names the model that is missing',
+    rejected.message.includes('not-installed:8b'), rejected.message);
+  check('and gives the exact command that fixes it',
+    rejected.message.includes('ollama pull not-installed:8b'), rejected.message);
+  check('and lists the models actually installed, so there is a choice to make',
+    rejected.message.includes('llama2:latest') && rejected.message.includes('qwen3:latest'), rejected.message);
+  check('it does not blame the server being down, which would be wrong here',
+    !/is it running/.test(rejected.message), rejected.message);
+  check('the installed list is fetched only after a 404, not on every draft',
+    calls.filter((u) => u.endsWith('/api/tags')).length === 1, JSON.stringify(calls));
+}
+
+{
+  const fetchImpl = async (url) => {
+    if (url.endsWith('/api/tags')) return { ok: true, status: 200, json: async () => ({ models: [] }) };
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: 'sort my photos', model: 'x:1b', fetchImpl, now: TODAY });
+  } catch (err) { rejected = err; }
+  check('with no models installed at all, it says so rather than listing nothing',
+    rejected.message.includes('no models at all'), rejected.message);
+}
+
+{
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ models: [{ name: 'a:1' }, { name: 'b:2' }] }) });
+  const names = await nlRules.listModels({ fetchImpl });
+  check('listModels returns the installed names', JSON.stringify(names) === '["a:1","b:2"]', JSON.stringify(names));
+  const unreachable = await nlRules.listModels({ fetchImpl: async () => { throw new Error('ECONNREFUSED'); } });
+  check('listModels returns [] rather than throwing when nothing answers',
+    Array.isArray(unreachable) && unreachable.length === 0);
+}
+
 // --- the cloud-storage hint: a plain local check, not a model call -------------
 
 check('an instruction mentioning Google Drive gets an informational note',

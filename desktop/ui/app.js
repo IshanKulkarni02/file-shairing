@@ -1705,6 +1705,9 @@ async function loadRules() {
 
   renderRulesHistory(state.history, state.gitAvailable);
   await loadRulesBatches();
+  // Independent of the rules themselves, and a failure here (Ollama not
+  // installed at all, say) must not stop the rest of the screen rendering.
+  await loadRulesModels().catch(() => {});
 }
 
 function renderRulesHistory(history, gitAvailable) {
@@ -1852,6 +1855,56 @@ $('rulesPreviewCloseBtn').addEventListener('click', () => { $('rulesPreviewCard'
 // explicit click. "Run once" and "Add to my rules" both re-validate on the
 // main process side regardless of what draftRule originally reported, so
 // hand-editing the drafted line before either action is always safe.
+
+/**
+ * Show which local models are actually installed, and let one be chosen.
+ *
+ * Ollama answers a request for a model it does not have with 404, which
+ * looks exactly like "the server is not running" while meaning the
+ * opposite. With the model previously hardcoded and invisible, that made
+ * the whole feature look broken with nothing to act on — so the state of
+ * the world is spelled out here rather than left to be deduced from an
+ * error code.
+ */
+async function loadRulesModels() {
+  const select = $('rulesModelSelect');
+  const note = $('rulesModelNote');
+  const result = await window.lanshare.rules.models();
+  if (!result.ok) { note.textContent = result.error; return; }
+
+  select.textContent = '';
+  for (const name of result.installed) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    select.append(opt);
+  }
+
+  if (!result.reachable) {
+    // No models listed at all means the request for the list failed, which
+    // (unlike a missing model) really does mean nothing is answering.
+    const opt = document.createElement('option');
+    opt.value = result.selected;
+    opt.textContent = `${result.selected} (Ollama not reachable)`;
+    select.append(opt);
+    note.textContent = `Nothing is answering at ${result.host}. Start Ollama, then press Refresh.`;
+  } else if (!result.selectedInstalled) {
+    note.textContent = `"${result.selected}" is not installed — pick one of the ${result.installed.length} above, `
+      + `or run "ollama pull ${result.selected}" to download it.`;
+  } else {
+    note.textContent = `Drafting with ${result.selected}.`;
+  }
+  select.value = result.selectedInstalled ? result.selected : (result.installed[0] || result.selected);
+}
+
+$('rulesModelSelect').addEventListener('change', async () => {
+  const result = await window.lanshare.rules.setModel($('rulesModelSelect').value);
+  $('rulesModelNote').textContent = result.ok
+    ? `Drafting with ${result.selected}.`
+    : result.error;
+});
+
+$('rulesModelRefreshBtn').addEventListener('click', () => loadRulesModels());
 
 $('rulesDraftBtn').addEventListener('click', async () => {
   const instruction = $('rulesInstructionInput').value.trim();

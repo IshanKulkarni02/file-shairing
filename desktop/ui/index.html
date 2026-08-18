@@ -461,6 +461,13 @@
         Type a plain sentence and a local model on this machine (<a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>,
         not running here by default) drafts a rule below for you to review — nothing is saved or run until you say so.
       </p>
+      <div class="field-row" style="margin-bottom:.5rem">
+        <label class="sr-only" for="rulesModelSelect">Model</label>
+        <select class="select" id="rulesModelSelect" style="flex:1"></select>
+        <button class="btn" id="rulesModelRefreshBtn" title="Look again for installed models">Refresh</button>
+      </div>
+      <p class="panel__sub" id="rulesModelNote" style="margin:0 0 .6rem"></p>
+
       <div class="field-row">
         <input class="field__input" id="rulesInstructionInput" type="text" style="flex:1"
           placeholder='e.g. &quot;keep drone shots in /Drone, organised by year and month&quot;'>

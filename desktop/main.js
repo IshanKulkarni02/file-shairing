@@ -713,6 +713,22 @@ ipcMain.handle('rules:draft', guarded(async (event, instruction) => {
   return { ...draft, preview };
 }));
 
+ipcMain.handle('rules:models', guarded(async () => {
+  const host = config.nlRules?.host || nlRulesLib.DEFAULT_HOST;
+  const installed = await nlRulesLib.listModels({ host });
+  const selected = config.nlRules?.model || nlRulesLib.DEFAULT_MODEL;
+  return {
+    host, installed, selected, reachable: installed.length > 0, selectedInstalled: installed.includes(selected),
+  };
+}));
+
+ipcMain.handle('rules:setModel', guarded((event, model) => {
+  if (typeof model !== 'string' || !model.trim()) throw new nlRulesLib.NlRulesError('Pick a model');
+  config.nlRules = { ...(config.nlRules || {}), model: model.trim() };
+  configLib.save(config);
+  return { selected: config.nlRules.model };
+}));
+
 ipcMain.handle('rules:runOnce', guarded(async (event, text) => {
   const planned = await sortEngineLib.plan({ library: libraryPath(), entries: currentIndexEntries(), rulesText: text });
   const batch = await sortEngineLib.apply({ library: libraryPath(), moves: planned.moves });

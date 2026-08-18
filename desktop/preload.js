@@ -122,6 +122,8 @@ contextBridge.exposeInMainWorld('lanshare', {
     undo: () => invoke('rules:undo'),
     draft: (instruction) => invoke('rules:draft', instruction),
     runOnce: (text) => invoke('rules:runOnce', text),
+    models: () => invoke('rules:models'),
+    setModel: (model) => invoke('rules:setModel', model),
   },
 
   capture: {
