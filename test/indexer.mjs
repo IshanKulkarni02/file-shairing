@@ -63,6 +63,41 @@ try {
     const notes = db.getByPath('/notes.txt');
     check('a non-image file is indexed too, just without photo metadata',
       notes?.kind === 'file' && notes?.camera_make === null, JSON.stringify(notes));
+    check('and carries no clock basis either, since it has no capture time',
+      notes?.captured_at_basis === null, notes?.captured_at_basis);
+  }
+
+  // --- captured_at_basis: the fix for Phase O1's clock-drift prerequisite ----
+  // A photo's GPS fix carries its own UTC clock (GPSDateStamp/GPSTimeStamp),
+  // independent of the camera's local-time DateTimeOriginal. Only a photo
+  // with both should be marked 'utc-gps'; one with only local time is
+  // 'local-naive' — the two must never be silently treated as comparable.
+
+  {
+    const { library, db } = scratch();
+    mkdirSync(path.join(library, 'Mixed'), { recursive: true });
+    writeFileSync(path.join(library, 'Mixed', 'gps-fix.jpg'), realisticJpeg({
+      make: 'Apple', dateTimeOriginal: '2026:08:11 16:00:00',
+      lat: 32.24, latRef: 'N', lon: 77.19, lonRef: 'E',
+      gpsDateStamp: '2026:08:11', gpsTimeStamp: [10, 30, 0],
+    }));
+    writeFileSync(path.join(library, 'Mixed', 'no-gps.jpg'), realisticJpeg({
+      make: 'Canon', dateTimeOriginal: '2026:08:11 16:00:00',
+    }));
+
+    await scanLibrary(library, db);
+
+    const withFix = db.getByPath('/Mixed/gps-fix.jpg');
+    check('a photo with a GPS time stamp is marked utc-gps',
+      withFix?.captured_at_basis === 'utc-gps', withFix?.captured_at_basis);
+    check('and its captured_at is the GPS UTC instant, not the local clock',
+      withFix?.captured_at === '2026-08-11T10:30:00.000Z', withFix?.captured_at);
+
+    const noFix = db.getByPath('/Mixed/no-gps.jpg');
+    check('a photo with only a local-time date is marked local-naive',
+      noFix?.captured_at_basis === 'local-naive', noFix?.captured_at_basis);
+    check('and keeps the naive local string as-is, with no fabricated offset',
+      noFix?.captured_at === '2026-08-11T16:00:00', noFix?.captured_at);
   }
 
   // --- a second scan of nothing changed really does nothing ------------------

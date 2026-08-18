@@ -18,6 +18,7 @@ const TAG = {
   EXIF_IFD: 0x8769, GPS_IFD: 0x8825,
   DATE_TIME_ORIGINAL: 0x9003, PIXEL_X: 0xa002, PIXEL_Y: 0xa003,
   GPS_LAT_REF: 0x0001, GPS_LAT: 0x0002, GPS_LON_REF: 0x0003, GPS_LON: 0x0004,
+  GPS_TIME_STAMP: 0x0007, GPS_DATE_STAMP: 0x001d,
 };
 const TYPE = { ASCII: 2, SHORT: 3, LONG: 4, RATIONAL: 5 };
 
@@ -133,7 +134,10 @@ function toDms(decimal) {
  * A realistic photo: any of make, model, orientation, capture date, GPS,
  * pixel dimensions. Every field is optional; only what is passed is written.
  */
-function realisticJpeg({ make, model, orientation, dateTimeOriginal, lat, latRef, lon, lonRef, pixelWidth, pixelHeight, padTo } = {}) {
+function realisticJpeg({
+  make, model, orientation, dateTimeOriginal, lat, latRef, lon, lonRef,
+  gpsDateStamp, gpsTimeStamp, pixelWidth, pixelHeight, padTo,
+} = {}) {
   const ifd0 = [];
   if (make) ifd0.push(field(TAG.MAKE, TYPE.ASCII, make));
   if (model) ifd0.push(field(TAG.MODEL, TYPE.ASCII, model));
@@ -156,6 +160,16 @@ function realisticJpeg({ make, model, orientation, dateTimeOriginal, lat, latRef
       field(TAG.GPS_LON_REF, TYPE.ASCII, lonRef),
       field(TAG.GPS_LON, TYPE.RATIONAL, toDms(lon)),
     ];
+    // GPSDateStamp/GPSTimeStamp are the fix's own UTC clock — separate from
+    // DateTimeOriginal, which is the camera's local-time clock with no
+    // offset recorded. Only written when a test asks for them, since most
+    // fixtures are testing something else and a GPS fix without a time
+    // stamp (some real cameras) needs to stay representable too.
+    if (gpsDateStamp) extra.gpsIfd.push(field(TAG.GPS_DATE_STAMP, TYPE.ASCII, gpsDateStamp));
+    if (gpsTimeStamp) {
+      const [h, m, s] = gpsTimeStamp;
+      extra.gpsIfd.push(field(TAG.GPS_TIME_STAMP, TYPE.RATIONAL, [h, 1, m, 1, s, 1]));
+    }
     ifd0.push({ tag: TAG.GPS_IFD, type: TYPE.LONG, pointsTo: 'gpsIfd' });
   }
 
