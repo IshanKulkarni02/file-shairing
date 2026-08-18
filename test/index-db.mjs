@@ -496,6 +496,30 @@ try {
 
     db.close();
   }
+
+  // --- Phase O2: audit_log ------------------------------------------------
+
+  {
+    const db = scratchDb();
+    db.appendAuditLog({ actionType: 'trip_cluster', subjectId: 'c1', decision: 'auto-approved', reason: 'trust=auto' });
+    db.appendAuditLog({ actionType: 'camera_correction', subjectId: 'corr1', decision: 'ghost-logged' });
+    db.appendAuditLog({ actionType: 'trip_cluster', subjectId: 'c2', decision: 'demoted', reason: 'reverted' });
+
+    const all = db.listAuditLog();
+    check('every entry is recorded', all.length === 3, all.length);
+    check('newest first', all[0].subjectId === 'c2' && all[2].subjectId === 'c1', JSON.stringify(all.map((e) => e.subjectId)));
+    check('a reason is optional — absent when not given', all.find((e) => e.subjectId === 'corr1').reason === null);
+    check('a reason is preserved when given', all.find((e) => e.subjectId === 'c1').reason === 'trust=auto');
+
+    const tripOnly = db.listAuditLog({ actionType: 'trip_cluster' });
+    check('filtering by action type returns only that type',
+      tripOnly.length === 2 && tripOnly.every((e) => e.actionType === 'trip_cluster'), JSON.stringify(tripOnly));
+
+    const limited = db.listAuditLog({ limit: 1 });
+    check('limit is respected', limited.length === 1);
+
+    db.close();
+  }
 } catch (err) {
   fail++;
   console.log(`  FAIL  unexpected error -> ${err.stack || err.message}`);

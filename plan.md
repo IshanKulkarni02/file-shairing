@@ -31,7 +31,7 @@ the internet without port forwarding.
 | L | Sorting rules, versioned in git | **Done** |
 | M | Instructions in plain language | **Done** (grammar/plumbing tested; real-model quality unverified here) |
 | N | Content search — the fuzzy cases | **Done** (CPU-verified end to end; GPU and packaged-install unverified here) |
-| O | The assistant — tools, graduated trust, trips | O1 **Done** (Adaptive Pattern Engine); O2–O5 not started |
+| O | The assistant — tools, graduated trust, trips | O1–O2 **Done**; O3–O5 not started |
 
 Phases A–G made one machine's library good and let machines reach each other.
 H–N are a different goal: **one searchable space across every device and
@@ -1614,7 +1614,47 @@ supports this, but nothing yet triggers it automatically — approving a
 supersession today would need a proposal created by hand, or a future
 pass); or any review UI beyond the admin JSON API
 (`/api/pattern-engine/*`) — a desktop/gallery screen for the queue is
-natural O1.5/O2 work, not built here.
+natural O4 work, not built here.
+
+## O2 — Tool layer + trust (shipped, scoped to O1's two action types)
+
+Graduated trust, exactly as designed above, wired to `trip_cluster` and
+`camera_correction` — the two action types O1 built. Not the *general* tool
+inventory (`save_rule`, `apply_rules`, `run_once`, `import_from_card`)
+described in "The tool layer is the actual design" above; wiring trust
+generically across every write action is O3's job, once there is an actual
+tool-calling loop deciding which one to invoke. This is the trust *ladder
+mechanism* proven real end to end on the two action types that already
+exist, not the whole inventory.
+
+- `lib/trust.js` — three levels (`ask`/`ghost`/`auto`) per action type,
+  stored in `config.json`. Promotion is *offered*, never automatic, per the
+  "it offers to promote" language above: `promotionEligibility()` computes
+  the evidence (a consecutive-approval streak for ask→ghost, a
+  consecutive-ghost-log streak for ghost→auto) and a caller decides whether
+  to surface an offer. Demotion is the one unconditional path — any revert
+  demotes immediately.
+- `lib/index-db.js` gained `audit_log` — every *automatic* decision
+  (`auto-approved` / `ghost-logged` / `demoted`), never a direct human
+  action (`rule_proposals.decided_at`/`status` already covers those). This
+  is what makes "it arranged things while I was out" answerable.
+- `lib/pattern-discovery.js`'s `runDiscoveryPass()` now checks trust for
+  every new proposal: `ask` behaves exactly as O1 shipped it; `ghost` logs
+  what *would* happen without touching anything; `auto` calls the real
+  `approveProposal()` immediately — auto-running is not a second, less-
+  checked path, it's the same one a human's click already uses. New:
+  `revertProposal()`, the undo escape hatch — reverses an approved
+  proposal (removing its appended rule line, via new `removeRuleLine()`)
+  and demotes that action type back to `ask`.
+- `lib/config.js` gained `configVersion()`/version-checked `save()` —
+  the compare-and-swap this section flagged as owed back when the same bug
+  was fixed for the rules file. Trust-state writes are its first real
+  caller; every existing caller that omits a version keeps working exactly
+  as before.
+- Routes: `GET/POST /api/trust`, `GET /api/audit-log`,
+  `POST /api/pattern-engine/proposals/:id/revert` — all admin-gated,
+  mirroring the existing `/api/sort-rules/*`/`/api/pattern-engine/*`
+  pattern. No UI yet (see O4).
 
 ## Order of work
 
@@ -1622,14 +1662,13 @@ Each lands useful alone; none requires the next.
 
 - **O1 — The Adaptive Pattern Engine.** Shipped, per the section above:
   clustering, GPS anchoring, clock-drift correction, semantic bridging, and
-  the Ghost Mode proposal queue with admin routes. Already covers a slice of
-  what O2 below describes (two action types — `trip_cluster` and
-  `camera_correction` — flowing through Ghost Mode into the graduated-trust
-  ladder), not the whole of it.
-- **O2 — Tool layer + trust.** The general tool inventory, trust levels
-  applied uniformly across every action type (not just the two O1 adds),
-  promotion and demotion, audit log. All testable without a model in the
-  loop.
+  the Ghost Mode proposal queue with admin routes.
+- **O2 — Tool layer + trust.** Shipped, scoped to O1's two action types (see
+  the section above): the trust ladder mechanism, promotion evidence,
+  demotion, audit log, and version-checked config writes, proven real end
+  to end. Extending trust generically across every write action (`save_rule`,
+  `apply_rules`, `run_once`, `import_from_card`) is O3's job below, once a
+  tool-calling loop exists to decide which one to invoke.
 - **O3 — The loop.** Hermes 3 backend, tool calling, `ask_user`, memory fed
   into prompts. The first point it behaves like an assistant.
 - **O4 — Chat UI.** Conversation panel in the desktop app, then the gallery
