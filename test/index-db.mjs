@@ -520,6 +520,27 @@ try {
 
     db.close();
   }
+
+  // --- Phase O3: assistant_memory ------------------------------------------
+
+  {
+    const db = scratchDb();
+    db.rememberInstruction({ instruction: 'drone shots to /Drone', ruleText: 'when camera.make = "DJI" -> /Drone' });
+    db.rememberInstruction({
+      instruction: 'ride photos organised by camera', ruleText: 'when kind = image -> /Rides/{camera}', isCorrection: true,
+    });
+
+    const all = db.allMemory();
+    check('every remembered pair is recorded', all.length === 2, all.length);
+    check('newest first', all[0].instruction === 'ride photos organised by camera');
+    check('an ordinary acceptance is not marked as a correction',
+      all.find((e) => e.instruction.includes('drone')).isCorrection === false);
+    check('a correction is marked as such', all.find((e) => e.instruction.includes('ride')).isCorrection === true);
+    check('the rule text is preserved exactly',
+      all.find((e) => e.instruction.includes('drone')).ruleText === 'when camera.make = "DJI" -> /Drone');
+
+    db.close();
+  }
 } catch (err) {
   fail++;
   console.log(`  FAIL  unexpected error -> ${err.stack || err.message}`);
