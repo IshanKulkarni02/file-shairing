@@ -205,6 +205,47 @@ const TODAY = new Date('2026-08-11T15:00:00Z');
     rejected.message.includes('no models at all'), rejected.message);
 }
 
+// --- a model that cannot load: Ollama knows why, so say what it said ----------
+// Real case: llama3.2-vision on an Ollama too old for its architecture answers
+// 500 with "unknown model architecture: 'mllama'". Reporting only the status
+// code sent someone looking for a problem in their prompt, when the model had
+// never loaded and the prompt was never seen.
+
+{
+  const fetchImpl = async () => ({
+    ok: false,
+    status: 500,
+    json: async () => ({
+      error: "llama-server process has terminated: exit status 1: error loading model: unknown model architecture: 'mllama'"
+        + "\nerror loading model: unknown model architecture: 'mllama'",
+    }),
+  });
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: 'sort my photos', model: 'llama3.2-vision:11b', fetchImpl, now: TODAY });
+  } catch (err) { rejected = err; }
+
+  check('a model that fails to load reports what Ollama actually said',
+    rejected.message.includes('unknown model architecture'), rejected.message);
+  check('and names the model that could not run',
+    rejected.message.includes('llama3.2-vision:11b'), rejected.message);
+  check('and does not reduce it to a bare status code',
+    !/refused that request/.test(rejected.message), rejected.message);
+  check('the repeated second line is trimmed off',
+    (rejected.message.match(/unknown model architecture/g) || []).length === 1, rejected.message);
+}
+
+{
+  // A non-OK response with no readable body still has to say something.
+  const fetchImpl = async () => ({ ok: false, status: 503, json: async () => { throw new SyntaxError('no body'); } });
+  let rejected = null;
+  try {
+    await nlRules.draftRule({ instruction: 'sort my photos', model: 'x:1', fetchImpl, now: TODAY });
+  } catch (err) { rejected = err; }
+  check('an unreadable error body falls back to the status code rather than throwing',
+    rejected instanceof nlRules.NlRulesError && rejected.message.includes('503'), rejected.message);
+}
+
 {
   const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ models: [{ name: 'a:1' }, { name: 'b:2' }] }) });
   const names = await nlRules.listModels({ fetchImpl });
