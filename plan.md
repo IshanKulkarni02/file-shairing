@@ -31,7 +31,7 @@ the internet without port forwarding.
 | L | Sorting rules, versioned in git | **Done** |
 | M | Instructions in plain language | **Done** (grammar/plumbing tested; real-model quality unverified here) |
 | N | Content search — the fuzzy cases | **Done** (CPU-verified end to end; GPU and packaged-install unverified here) |
-| O | The assistant — tools, graduated trust, trips | O1–O2 **Done**; O3–O5 not started |
+| O | The assistant — tools, graduated trust, trips | O1–O3 **Done**; O4–O5 not started |
 
 Phases A–G made one machine's library good and let machines reach each other.
 H–N are a different goal: **one searchable space across every device and
@@ -1656,6 +1656,65 @@ exist, not the whole inventory.
   mirroring the existing `/api/sort-rules/*`/`/api/pattern-engine/*`
   pattern. No UI yet (see O4).
 
+## O3 — The loop (shipped)
+
+"The model drafts, a person approves, tested code executes" carries over
+unchanged from Phase M's one-line rule drafting — the model now picks
+*which* tested code to run, but every write it can reach still only ever
+does what the trust-gated tool layer below already allows.
+
+- `lib/assistant-tools.js` — the general tool inventory this section
+  promised: read tools (`search_library`, `describe_library`, `detect_trips`,
+  `preview_rule`, `list_rules`, `list_trips`) always just run; write tools
+  (`save_rule`, `apply_rules`, `run_once`) each carry a `preview` alongside
+  `execute`, which is what lets `invokeTool()` apply *any* current trust
+  level to *any* of them — `ask`/`ghost` return the preview only (`ghost`
+  also logs it), `auto` actually runs it — the exact mechanism O2 proved on
+  Ghost Mode's two proposal kinds, now generic. `undo_last` always executes
+  for real regardless of trust, per "an escape hatch that needs permission
+  is not one." `ask_user` is in the schema the model sees but carries no
+  `execute` at all — answering it means pausing the loop, so
+  `lib/assistant.js` intercepts it by name before it would ever reach
+  `invokeTool()`.
+
+  `import_from_card` is not a tool yet — wiring it safely needs either a
+  real capture device or a properly simulated one to test against, a
+  separate piece of work.
+
+- `lib/assistant.js` — the loop itself, talking to Ollama's `/api/chat`
+  with OpenAI-style function-calling `tools`. **Hermes 3 8B** (`hermes3:8b`)
+  is the default model, per the earlier model-choice section — verified
+  available on this machine, sized for its 6 GB card. Error handling
+  mirrors `lib/nl-rules.js` exactly (a 404 names the missing model and what
+  is installed instead; a non-OK response surfaces Ollama's own error body).
+  A model that keeps calling tools without ever answering is cut off after
+  a bounded number of calls rather than looping forever.
+
+- **Machine guesses are never stored as facts, applied to memory too.**
+  `lib/assistant-memory.js`'s `closestExamples()` retrieves the few most
+  relevant past instruction/rule pairs via keyword-overlap scoring — a
+  second embedding pipeline just to rank a few dozen short strings would be
+  more machinery than the problem needs, when this project already has one
+  (`lib/clip.js`, for images) doing something genuinely different. Stored
+  as the corrected pair, never as "the model said X and X was wrong," per
+  the framing this section committed to. Corrections outrank an ordinary
+  acceptance at equal overlap; the single most recent correction always
+  surfaces regardless of topic.
+
+- Routes: `POST /api/assistant/message` (one turn; stateless server-side —
+  the client holds and resends the conversation, same shape a plain chat
+  completion API already has), `GET/POST /api/assistant/models` (its own
+  model setting, `config.assistant.model`, separate from Phase M's
+  rule-drafting model). All admin-gated.
+
+**What O3 does not yet do:** a chat UI to actually talk to it (see O4);
+automatic detection of *which* save_rule calls were corrections versus
+plain acceptances — `rememberInstruction()`'s `isCorrection` flag is real
+and tested, but nothing yet sets it from conversation flow alone, since
+that needs an explicit "no, I meant this" UI action to mean anything
+honestly, which is O4 work too; and `import_from_card` as a tool, noted
+above.
+
 ## Order of work
 
 Each lands useful alone; none requires the next.
@@ -1669,11 +1728,13 @@ Each lands useful alone; none requires the next.
   to end. Extending trust generically across every write action (`save_rule`,
   `apply_rules`, `run_once`, `import_from_card`) is O3's job below, once a
   tool-calling loop exists to decide which one to invoke.
-- **O3 — The loop.** Hermes 3 backend, tool calling, `ask_user`, memory fed
-  into prompts. The first point it behaves like an assistant.
+- **O3 — The loop.** Shipped, per the section above: Hermes 3 backend, the
+  general trust-gated tool layer, `ask_user`, corrected-pair memory fed into
+  prompts, and the chat routes. The backend behaves like an assistant now —
+  there is just nothing to talk to it with yet.
 - **O4 — Chat UI.** Conversation panel in the desktop app, then the gallery
   — including a proper review screen for the Ghost Mode queue O1 built the
-  routes for.
+  routes for, and the Trust screen O2 built the routes for.
 - **O5 — Cloud on demand.** Second backend, "think harder", the disclosure UI.
 
 ## Concurrent writers: correctness first, realtime second
