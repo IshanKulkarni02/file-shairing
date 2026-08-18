@@ -115,7 +115,7 @@ contextBridge.exposeInMainWorld('lanshare', {
 
   rules: {
     get: () => invoke('rules:get'),
-    save: (text) => invoke('rules:save', text),
+    save: (text, expectedVersion) => invoke('rules:save', text, expectedVersion),
     plan: () => invoke('rules:plan'),
     apply: () => invoke('rules:apply'),
     batches: () => invoke('rules:batches'),

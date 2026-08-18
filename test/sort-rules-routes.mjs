@@ -93,8 +93,47 @@ try {
   res = await admin('/api/sort-rules');
   body = await res.json();
   check('the saved rules read back exactly', body.text === ruleText, JSON.stringify(body));
+  check('a version is reported, for optimistic concurrency', typeof body.version === 'string' && body.version.length > 0,
+    JSON.stringify(body));
   check('git history is reported when git is available',
     !body.gitAvailable || body.history.some((h) => h.subject === `rules for ${RUN}`), JSON.stringify(body));
+
+  // --- concurrent editors cannot silently erase each other's work -----------
+  // Two admin tabs both load the current rules, both edit, both save. Without
+  // a version check the second save used to overwrite the first and report
+  // success — a real, live bug, not a hypothetical for this phase.
+
+  {
+    const staleVersion = body.version;
+    res = await admin('/api/sort-rules', json({ text: `${ruleText}\nwhen kind = video -> ${INBOX}/Videos` }));
+    const firstBody = await res.json();
+    check('the first editor\'s save succeeds', res.status === 200, JSON.stringify(firstBody));
+
+    res = await admin('/api/sort-rules', json({
+      text: `${ruleText}\nwhen kind = audio -> ${INBOX}/Audio`, version: staleVersion,
+    }));
+    body = await res.json();
+    check('a save against the now-stale version is refused with 409, not silently applied',
+      res.status === 409, `got ${res.status}`);
+    check('the conflict response carries the current text to reconcile against',
+      typeof body.currentText === 'string' && body.currentText.includes('Videos'), JSON.stringify(body));
+    check('the conflict response carries a fresh version to retry with',
+      typeof body.currentVersion === 'string' && body.currentVersion !== staleVersion, JSON.stringify(body));
+
+    res = await admin('/api/sort-rules');
+    body = await res.json();
+    check('the first editor\'s save is still on disk, untouched by the refused second save',
+      body.text.includes('Videos') && !body.text.includes('Audio'), JSON.stringify(body));
+
+    // Retrying via the If-Match header (the other accepted spelling, besides
+    // a `version` field in the body) against the fresh version succeeds.
+    res = await admin('/api/sort-rules', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'If-Match': `"${body.version}"` },
+      body: JSON.stringify({ text: ruleText }),
+    });
+    check('retrying with the fresh version via If-Match succeeds', res.status === 200, `got ${res.status}`);
+  }
 
   // --- a real dry run and a real apply ----------------------------------------
 

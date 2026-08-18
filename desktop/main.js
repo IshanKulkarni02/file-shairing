@@ -668,13 +668,33 @@ ipcMain.handle('rules:get', () => {
     error = err.message;
   }
   return {
-    text, ruleCount, error, gitAvailable: sortRulesLib.isGitAvailable(), history: sortRulesLib.ruleHistory(libraryPath()),
+    text,
+    ruleCount,
+    error,
+    version: sortRulesLib.rulesVersion(libraryPath()),
+    gitAvailable: sortRulesLib.isGitAvailable(),
+    history: sortRulesLib.ruleHistory(libraryPath()),
   };
 });
 
-ipcMain.handle('rules:save', guarded((event, text) => {
-  const parsed = sortRulesLib.saveRulesText(libraryPath(), text, { message: 'Update sorting rules' });
-  return { ruleCount: parsed.length };
+ipcMain.handle('rules:save', guarded((event, text, expectedVersion = null) => {
+  try {
+    const parsed = sortRulesLib.saveRulesText(libraryPath(), text, {
+      message: 'Update sorting rules',
+      expectedVersion,
+    });
+    return { ruleCount: parsed.length, version: sortRulesLib.rulesVersion(libraryPath()) };
+  } catch (err) {
+    // guarded() would flatten this to {ok:false, error} like any other
+    // SortRulesError, losing the current text the editor needs to reconcile
+    // against — so a conflict is handed back whole instead.
+    if (err instanceof sortRulesLib.RulesConflictError) {
+      return {
+        conflict: true, error: err.message, currentText: err.currentText, currentVersion: err.currentVersion,
+      };
+    }
+    throw err;
+  }
 }));
 
 ipcMain.handle('rules:plan', guarded(async () => {

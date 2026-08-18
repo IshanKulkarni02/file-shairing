@@ -1395,7 +1395,15 @@ No weights are trained. Nothing is fine-tuned. What is built instead:
   fraction of fine-tuning's cost, and it degrades gracefully — a bad example
   is deletable, where a bad fine-tune is a retrain.
 - **Correction memory.** A draft you rewrite is a stronger signal than one
-  you accept; both are kept, the correction weighted higher.
+  you accept; both are kept, the correction weighted higher, and a recent
+  correction is pulled into the next few prompts regardless of topic — the
+  fastest way to stop a wrong pattern repeating.
+
+  Stored and injected as **the corrected pair** — your instruction, and the
+  rule you actually wanted — never as "the model said X and X was wrong".
+  Showing a model its own bad output tends to anchor it toward that output;
+  showing the right answer for that instruction carries the same information
+  without the pull.
 
 Stated plainly so nobody later reads "learns" as more than it is: this is
 retrieval-augmented prompting over your own history. It genuinely improves
@@ -1418,6 +1426,52 @@ implement one interface, so neither is load-bearing for the other.
 **What leaves the machine on a cloud call must be stated in the UI at the
 moment of the call** — file names, camera fields and paths, never file
 contents. Anything less is a privacy surprise.
+
+## Structured output, not text the parser has to rescue
+
+Ollama supports grammar-constrained decoding — a JSON Schema in `format`
+constrains generation at the token level, so the model *cannot* emit
+malformed output. Verified working on this machine (Ollama 0.32.13,
+`llama2:latest` returned schema-conformant JSON on the first try).
+
+This is used two ways:
+
+- **Tool calls** are JSON, so the schema is the tool's own signature. A
+  malformed tool call stops being a case to handle.
+- **Rules stop being generated as text at all.** The model emits a
+  constrained object — field, operator, value, destination — and the DSL
+  line is *generated deterministically from that*. Phase M asks the model to
+  write `when camera.make = "DJI" -> /X` and then parses it back; making the
+  structure the interface removes DSL syntax hallucination as a category
+  rather than catching it after the fact.
+
+`sortRules.parse()` stays exactly where it is, validating everything before
+it acts. It should simply stop ever firing on model output. Belt and braces:
+the schema prevents the error, the parser proves it was prevented.
+
+Worth recording since it was got wrong once: Ollama answering **404** means
+the model is not installed, and **an error body** carries the real reason
+when a model will not load. Both are far more useful than the status code,
+and both were being discarded.
+
+## Machine guesses are never stored as facts
+
+A vision model at import time (Moondream2, ~1.8 GB — fits the 6 GB card;
+`llama3.2-vision` does not and will not load here) can tag footage with a
+handful of words — "tent", "campfire", "motorcycle" — written into the
+SQLite index. FTS5 then answers most content questions instantly, leaving
+CLIP's vector maths for genuinely visual queries. It also buys something
+CLIP cannot: **explainability.** "Why did this match?" has an answer when a
+tag matched, and does not when a dot product was merely large.
+
+The hard constraint: **a tag is a guess and must never be stored where a
+fact lives.** Everything in the index so far is exact — `camera.make` is
+what the camera itself wrote. Tags are a model's opinion. They go in their
+own column, are addressed by their own rule syntax, and are shown
+differently in previews. If "sort by camera" and "sort by what it looks
+like" become indistinguishable, then the first time a guess misfiles
+something, confidence in the exact data goes with it — and the exact data
+is the reason this app can be trusted with a library at all.
 
 ## The tool layer is the actual design
 
@@ -1446,12 +1500,21 @@ somewhere to go that is not guessing.
 Trust is **per action type**, earned, and always visible:
 
 1. Everything writeable starts at **ask** — preview, you approve.
-2. After N approvals of the same action with no undo, it offers to promote
-   that one action to **auto**. Approving rule application never implies
+2. After repeated approvals with no undo, it offers to promote that one
+   action to **ghost** (below). Approving rule application never implies
    permission to import or delete.
-3. A Trust screen lists what is automatic, with one-click revert, and any
-   undo immediately demotes that action back to **ask** — undoing is the
+3. **Ghost** runs the action on schedule and writes to the audit log what it
+   *would* have done, touching nothing. After a week of real, messy footage
+   the log is the evidence for promoting it to **auto** — or for not.
+4. A Trust screen lists where every action sits, with one-click revert, and
+   any undo immediately demotes that action back to **ask** — undoing is the
    clearest possible signal that trust was premature.
+
+Ghost mode is nearly free to build: `sortEngine.plan()` is already a pure
+read-only dry run, so this is running it on a timer and logging the result
+without ever calling `apply()`. It is also the better promotion signal —
+evidence about *outcomes on real data* rather than a tally of how many times
+someone clicked approve.
 
 Every automatic action is written to an audit log with what ran, why, and
 what moved. "It arranged things while I was out" is only acceptable if
@@ -1483,6 +1546,32 @@ Each lands useful alone; none requires the next.
 - **O4 — Chat UI.** Conversation panel in the desktop app, then the gallery.
 - **O5 — Cloud on demand.** Second backend, "think harder", the disclosure UI.
 
+## Concurrent writers: correctness first, realtime second
+
+Two tabs, or a person and the assistant, can both load the rules, both edit,
+and both save. Node's event loop does not prevent this — the read and the
+write are separate requests with a human-length gap between them — and
+`POST /api/sort-rules` had no version check at all: the second save silently
+erased the first and reported success. A real bug, present before Phase O
+adds a second writer and worse once it does. **Fixed**, ahead of the rest of
+this phase, since it was live: `lib/sort-rules.js` gained `rulesVersion()`
+(a hash of the current text) and `saveRulesText()` an `expectedVersion`
+check, `RulesConflictError` on a mismatch carrying the current text back so
+an editor can reconcile rather than losing work silently. Wired through the
+HTTP route (`ETag` / `If-Match`, 409 on conflict) and the desktop IPC path
+identically. `config.json`'s trust-state writes need the same
+compare-and-swap once Phase O adds them — noted here so it is not
+forgotten a second time.
+
+A WebSocket was the first instinct and is the wrong first fix: pushing
+"rules changed" to open tabs makes staleness *less likely*, it cannot make a
+concurrent write *impossible* — two tabs can still race inside the
+notification window. Optimistic concurrency is what actually prevents the
+lost update; a realtime channel is a freshness nicety on top of that, not a
+substitute for it. It still earns a place later — streaming assistant
+tokens and live ghost-mode activity are exactly the case polling is the
+wrong tool for — just after correctness, not instead of it.
+
 ## Risks, stated plainly
 
 - **An 8B model will pick the wrong tool sometimes.** Mitigated structurally,
@@ -1496,6 +1585,22 @@ Each lands useful alone; none requires the next.
   granularity are the mitigations, and none of them is optional.
 - **"Learns" will be over-read** by anyone who did not read this section.
   Worth repeating wherever it is described in the UI.
+- **A stored tag is a guess wearing the same shape as a fact**, and the one
+  thing this section insists cannot be allowed to happen quietly. Enforced
+  by keeping tags in their own column with their own rule syntax, never
+  merged into the fields EXIF already owns.
+
+## Reviewed before any of it was built
+
+This design was put in front of a second reviewer before O1 started, on the
+theory that an architecture this consequential is cheaper to correct on
+paper. Four changes came from that pass, all folded in above rather than
+left as a separate list: schema-constrained tool/rule output, VLM tags kept
+structurally apart from EXIF facts, ghost mode as the step between ask and
+auto, and corrected-pair retrieval instead of showing the model its own
+mistake. The review also named a real bug already live in `/api/sort-rules`
+— a lost update on concurrent saves — which is fixed above rather than
+merely noted, since it did not need Phase O to already be a problem.
 
 ---
 

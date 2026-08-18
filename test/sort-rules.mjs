@@ -266,6 +266,65 @@ check('a file with no camera metadata at all gets no destination', rules.destina
   }
 }
 
+// --- concurrent saves cannot silently erase each other ----------------------
+// Two editors both load the rules, both change something, both save. Node
+// being single-threaded does not help: the read and the write are separate
+// requests with a human-length gap between them, so the second save used to
+// overwrite the first and report success. Matters more once the assistant is
+// also writing rules alongside a person.
+
+{
+  const library = mkdtempSync(path.join(tmpdir(), 'lanshare-rules-conflict-'));
+  try {
+    rules.saveRulesText(library, 'when kind = image -> /A');
+
+    const versionA = rules.rulesVersion(library); // editor A loads
+    const versionB = rules.rulesVersion(library); // editor B loads the same
+    check('two editors loading the same rules see the same version', versionA === versionB);
+
+    rules.saveRulesText(library, 'when kind = image -> /A\nwhen kind = video -> /B', { expectedVersion: versionA });
+    check('the first save goes through', rules.readRulesText(library).includes('/B'));
+
+    let conflict = null;
+    try {
+      rules.saveRulesText(library, 'when kind = image -> /A\nwhen kind = audio -> /C', { expectedVersion: versionB });
+    } catch (err) {
+      conflict = err;
+    }
+    check('the second save is refused rather than overwriting', conflict instanceof rules.RulesConflictError);
+    check('the first editor\'s work is still on disk', rules.readRulesText(library).includes('/B'));
+    check('and the second editor\'s change did NOT land', !rules.readRulesText(library).includes('/C'));
+    check('the conflict carries the current text, so the editor can reconcile',
+      conflict.currentText.includes('/B') && typeof conflict.currentVersion === 'string');
+    check('a conflict is still a SortRulesError, so existing handlers cope',
+      conflict instanceof rules.SortRulesError);
+
+    // Reloading gives the fresh version, and saving against it succeeds.
+    const fresh = rules.rulesVersion(library);
+    rules.saveRulesText(library, 'when kind = image -> /A\nwhen kind = audio -> /C', { expectedVersion: fresh });
+    check('saving against the reloaded version succeeds', rules.readRulesText(library).includes('/C'));
+
+    // Omitting the version keeps internal callers (Phase K's import) working.
+    rules.saveRulesText(library, 'when kind = image -> /Z');
+    check('a save with no expected version still overwrites, as before',
+      rules.readRulesText(library) === 'when kind = image -> /Z');
+
+    check('the version changes when the rules change', rules.rulesVersion(library) !== fresh);
+  } finally {
+    rmSync(library, { recursive: true, force: true });
+  }
+}
+
+{
+  const empty = mkdtempSync(path.join(tmpdir(), 'lanshare-rules-empty-version-'));
+  try {
+    check('a library with no rules yet still has a stable version, so a first save is an ordinary compare',
+      typeof rules.rulesVersion(empty) === 'string' && rules.rulesVersion(empty) === rules.rulesVersion(empty));
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+}
+
 // --- {camera}, {make}, {model} ---------------------------------------------
 // Without these, "by trip, then day, then camera" needs one rule per trip per
 // camera. They also matter for the specific case they were added for: a DJI

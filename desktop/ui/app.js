@@ -1695,9 +1695,12 @@ window.lanshare.capture.pending().then((detected) => {
 // ---------------------------------------------------------------------------
 
 let lastRulesPlan = null;
+/** What the rules said when this editor last loaded them — see the save handler. */
+let loadedRulesVersion = null;
 
 async function loadRules() {
   const state = await window.lanshare.rules.get();
+  loadedRulesVersion = state.version;
   // Never stomp on text someone is mid-edit of.
   if (document.activeElement !== $('rulesText')) $('rulesText').value = state.text;
   $('rulesError').textContent = state.error || '';
@@ -1769,7 +1772,27 @@ $('rulesSaveBtn').addEventListener('click', async () => {
   $('rulesError').classList.remove('is-shown');
   $('rulesSaveBtn').disabled = true;
   try {
-    const result = await window.lanshare.rules.save($('rulesText').value);
+    const result = await window.lanshare.rules.save($('rulesText').value, loadedRulesVersion);
+
+    // Someone (or, later, the assistant) changed the rules while this editor
+    // had them open. Nothing was overwritten. Offering the choice beats
+    // either silently clobbering their change or silently discarding yours.
+    if (result.conflict) {
+      const keepMine = confirm(`${result.error}\n\n`
+        + 'OK — overwrite with what you have here.\n'
+        + 'Cancel — discard your edit and load the current rules.');
+      if (keepMine) {
+        loadedRulesVersion = result.currentVersion;
+        $('rulesSaveBtn').disabled = false;
+        $('rulesSaveBtn').click();
+        return;
+      }
+      $('rulesText').value = result.currentText;
+      loadedRulesVersion = result.currentVersion;
+      $('rulesSaveNote').textContent = 'Loaded the current rules — your edit was not saved.';
+      return;
+    }
+
     if (!result.ok) {
       $('rulesError').textContent = result.error;
       $('rulesError').classList.add('is-shown');
