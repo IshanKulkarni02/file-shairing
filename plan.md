@@ -31,7 +31,7 @@ the internet without port forwarding.
 | L | Sorting rules, versioned in git | **Done** |
 | M | Instructions in plain language | **Done** (grammar/plumbing tested; real-model quality unverified here) |
 | N | Content search — the fuzzy cases | **Done** (CPU-verified end to end; GPU and packaged-install unverified here) |
-| O | The assistant — tools, graduated trust, trips | O1–O3 **Done**; O4–O5 not started |
+| O | The assistant — tools, graduated trust, trips | O1–O4 **Done** (O4 desktop-only); O5 not started |
 
 Phases A–G made one machine's library good and let machines reach each other.
 H–N are a different goal: **one searchable space across every device and
@@ -1715,6 +1715,43 @@ that needs an explicit "no, I meant this" UI action to mean anything
 honestly, which is O4 work too; and `import_from_card` as a tool, noted
 above.
 
+## O4 — Chat UI (shipped, desktop only)
+
+Two new screens in the desktop app, wired through new IPC handlers that
+call the exact same `lib/assistant.js`/`lib/trust.js`/
+`lib/pattern-discovery.js` functions the HTTP routes already use — the
+desktop chrome is a second front door onto the same tested logic, never a
+second, less-checked implementation of it.
+
+- **Assistant** — a real conversation panel. Every tool call the model
+  makes shows up as its own quiet log line, not folded invisibly into the
+  reply, so "what exactly did it do" (Graduated Trust's own standard,
+  applied here to the chat itself) stays visible turn by turn. An
+  `ask_user` question renders as clickable option buttons. The
+  conversation is held client-side across panel switches, matching the
+  stateless-server design O3 chose; "New conversation" resets it.
+- **Automation** — the Trust screen and Ghost Mode review queue O1/O2
+  built the routes for but had no UI: a select per action type
+  (ask/ghost/auto) with a promotion-eligibility hint the moment one is
+  earned, the pending-proposal queue with Approve/Reject, a
+  recently-approved list with Revert (which demotes trust straight back to
+  Ask, matching the backend's own rule), and a compact recent-activity view
+  of the audit log.
+
+**Verified:** both new files pass a syntax check, and
+`test/ui-contracts.mjs` (every id the new JS looks up exists in the HTML,
+and the new `.chat-log`/`.chat-msg` rules don't reintroduce the `[hidden]`
+CSS cascade bug this session hit twice already). **Not verified:** actually
+clicking through the panels in a live window — this environment has no
+display server to render a native Electron window in, so hands-on
+verification in the real desktop app is still owed before a release build.
+
+**What O4 does not yet do:** any of this in the web gallery (`public/`) —
+only the desktop app; a way to mark a chat correction as a correction, so
+`assistant_memory.isCorrection` still only gets set by an ordinary
+`save_rule` call (see O3's own gap above) — the honest fix needs a "no, I
+meant this" affordance in the chat panel itself, not built here.
+
 ## Order of work
 
 Each lands useful alone; none requires the next.
@@ -1732,9 +1769,10 @@ Each lands useful alone; none requires the next.
   general trust-gated tool layer, `ask_user`, corrected-pair memory fed into
   prompts, and the chat routes. The backend behaves like an assistant now —
   there is just nothing to talk to it with yet.
-- **O4 — Chat UI.** Conversation panel in the desktop app, then the gallery
-  — including a proper review screen for the Ghost Mode queue O1 built the
-  routes for, and the Trust screen O2 built the routes for.
+- **O4 — Chat UI.** Shipped for the desktop app (see the section above): the
+  conversation panel, plus the Trust and Ghost Mode review screens O1/O2
+  built the routes for. The web gallery still has none of this — desktop
+  only, for now.
 - **O5 — Cloud on demand.** Second backend, "think harder", the disclosure UI.
 
 ## Concurrent writers: correctness first, realtime second
