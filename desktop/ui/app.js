@@ -2021,6 +2021,7 @@ $('rulesDraftDiscardBtn').addEventListener('click', () => { $('rulesDraftResult'
 
 let assistantConversation = [];
 let assistantBusy = false;
+let assistantCloudInfo = { cloudAvailable: false, cloudConfigured: false, cloudModel: '', cloudDisclosure: '' };
 
 async function loadAssistant() {
   await loadAssistantModels().catch(() => {});
@@ -2053,7 +2054,71 @@ async function loadAssistantModels() {
     note.textContent = `Talking to ${result.selected}.`;
   }
   select.value = result.selectedInstalled ? result.selected : (result.installed[0] || result.selected);
+
+  assistantCloudInfo = {
+    cloudAvailable: Boolean(result.cloudAvailable),
+    cloudConfigured: Boolean(result.cloudConfigured),
+    cloudModel: result.cloudModel || '',
+    cloudDisclosure: result.cloudDisclosure || '',
+  };
+  renderAssistantCloudUi();
 }
+
+function renderAssistantCloudUi() {
+  const { cloudAvailable, cloudConfigured, cloudModel } = assistantCloudInfo;
+
+  $('assistantCloudCard').hidden = !cloudAvailable;
+  $('assistantCloudToggleLabel').hidden = !cloudAvailable;
+
+  const toggle = $('assistantCloudToggle');
+  toggle.disabled = !cloudConfigured;
+  if (!cloudConfigured) toggle.checked = false;
+
+  $('assistantCloudSetupRow').hidden = cloudConfigured;
+  $('assistantCloudConfiguredRow').hidden = !cloudConfigured;
+  $('assistantCloudNote').textContent = cloudConfigured
+    ? `A cloud key is set up (model: ${cloudModel}). "Think harder" sends this turn to Anthropic instead of your local model.`
+    : 'No cloud key is set up yet. Add one to enable "Think harder" — this is entirely optional.';
+
+  updateAssistantCloudDisclosure();
+}
+
+function updateAssistantCloudDisclosure() {
+  const box = $('assistantCloudDisclosure');
+  const wantsCloud = $('assistantCloudToggle').checked && !$('assistantCloudToggle').disabled;
+  box.hidden = !wantsCloud;
+  box.textContent = wantsCloud ? assistantCloudInfo.cloudDisclosure : '';
+}
+
+$('assistantCloudToggle').addEventListener('change', () => updateAssistantCloudDisclosure());
+
+$('assistantCloudSaveBtn').addEventListener('click', async () => {
+  const input = $('assistantCloudKeyInput');
+  const errEl = $('assistantCloudError');
+  errEl.textContent = '';
+  errEl.classList.remove('is-shown');
+  const result = await window.lanshare.assistant.setCloudKey(input.value);
+  if (!result.ok) {
+    errEl.textContent = result.error;
+    errEl.classList.add('is-shown');
+    return;
+  }
+  input.value = '';
+  await loadAssistantModels().catch(() => {});
+});
+
+$('assistantCloudRemoveBtn').addEventListener('click', async () => {
+  const errEl = $('assistantCloudError');
+  errEl.textContent = '';
+  errEl.classList.remove('is-shown');
+  const result = await window.lanshare.assistant.deleteCloudKey();
+  if (!result.ok) {
+    errEl.textContent = result.error;
+    errEl.classList.add('is-shown');
+    return;
+  }
+  await loadAssistantModels().catch(() => {});
+});
 
 $('assistantModelSelect').addEventListener('change', async () => {
   const result = await window.lanshare.assistant.setModel($('assistantModelSelect').value);
@@ -2095,8 +2160,10 @@ async function sendAssistantMessage(text) {
   assistantBusy = true;
   $('assistantSendBtn').disabled = true;
   $('assistantSendBtn').textContent = 'Thinking…';
+  const toggle = $('assistantCloudToggle');
+  const backend = (!toggle.disabled && toggle.checked) ? 'cloud' : 'local';
   try {
-    const result = await window.lanshare.assistant.message(text, assistantConversation);
+    const result = await window.lanshare.assistant.message(text, assistantConversation, backend);
     if (!result.ok) {
       $('assistantError').textContent = result.error;
       $('assistantError').classList.add('is-shown');
