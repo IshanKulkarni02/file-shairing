@@ -35,14 +35,14 @@ function scriptedFetch(responses, { models = [] } = {}) {
   let i = 0;
   const calls = [];
   const fn = async (url, options) => {
-    calls.push({ url, body: options?.body ? JSON.parse(options.body) : null });
+    calls.push({ url, headers: options?.headers, body: options?.body ? JSON.parse(options.body) : null });
     if (url.endsWith('/api/tags')) {
       return { ok: true, json: async () => ({ models: models.map((m) => ({ name: m })) }) };
     }
-    if (url.endsWith('/api/chat')) {
+    if (url.endsWith('/api/chat') || url.endsWith('/v1/messages')) {
       const next = responses[i];
       i += 1;
-      if (!next) throw new Error(`scriptedFetch exhausted after ${i - 1} calls — the loop called /api/chat more than scripted`);
+      if (!next) throw new Error(`scriptedFetch exhausted after ${i - 1} calls — the loop called the model endpoint more than scripted`);
       return typeof next === 'function' ? next() : next;
     }
     throw new Error(`unexpected URL in test: ${url}`);
@@ -52,6 +52,19 @@ function scriptedFetch(responses, { models = [] } = {}) {
 }
 
 const chatOk = (message) => ({ ok: true, json: async () => ({ message }) });
+
+/** A canned Anthropic Messages API response — a text block, a tool_use block, or both. */
+const cloudOk = ({ text = '', toolUse = [] } = {}) => ({
+  ok: true,
+  json: async () => ({
+    content: [
+      ...(text ? [{ type: 'text', text }] : []),
+      ...toolUse.map((t) => ({
+        type: 'tool_use', id: t.id || `toolu_${Math.random().toString(36).slice(2)}`, name: t.name, input: t.input || {},
+      })),
+    ],
+  }),
+});
 
 try {
   // --- a plain text answer, no tools called at all --------------------------
@@ -380,6 +393,199 @@ try {
     try { await assistant.converse({ library: scratchLibrary(), userMessage: 'hi', fetchImpl: scriptedFetch([]) }); } catch (err) { threw = err instanceof assistant.AssistantError; }
     check('converse() without a db is refused clearly', threw);
   }
+
+  // --- the cloud backend (Anthropic), a deliberate per-call choice -----------
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      let threw = null;
+      try {
+        await assistant.converse({
+          library, db, userMessage: 'hi', backend: 'cloud', fetchImpl: scriptedFetch([]),
+        });
+      } catch (err) { threw = err; }
+      check('the cloud backend refuses to even call out without an API key',
+        threw instanceof assistant.AssistantError && threw.message.toLowerCase().includes('api key'), threw?.message);
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      const fetchImpl = scriptedFetch([cloudOk({ text: 'You have 0 files.' })]);
+      const result = await assistant.converse({
+        library, db, userMessage: 'how many files?', backend: 'cloud', apiKey: 'sk-test-key', fetchImpl,
+      });
+      check('a cloud reply with no tool use is returned as a plain answer', result.reply === 'You have 0 files.');
+      check('the request goes to the Anthropic messages endpoint', fetchImpl.calls[0].url.endsWith('/v1/messages'));
+      check('the API key travels as the x-api-key header, never in the body',
+        fetchImpl.calls[0].headers['x-api-key'] === 'sk-test-key'
+        && JSON.stringify(fetchImpl.calls[0].body).indexOf('sk-test-key') === -1);
+      check('the system prompt is sent as Anthropic\'s own top-level field, not a message',
+        typeof fetchImpl.calls[0].body.system === 'string' && fetchImpl.calls[0].body.system.length > 0
+        && !fetchImpl.calls[0].body.messages.some((m) => m.role === 'system'), JSON.stringify(fetchImpl.calls[0].body.messages));
+      check('the tools are translated into Anthropic\'s input_schema shape, not OpenAI\'s function-wrapped one',
+        fetchImpl.calls[0].body.tools.some((t) => t.name === 'search_library' && t.input_schema), JSON.stringify(fetchImpl.calls[0].body.tools[0]));
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      db.upsert({
+        relPath: '/a.jpg', size: 1, mtimeMs: 1, hash: 'h1', kind: 'image', encrypted: 0,
+        cameraMake: 'DJI', cameraModel: 'FC3582', capturedAt: '2026-08-01T00:00:00.000Z', capturedAtBasis: 'utc',
+        gpsLat: null, gpsLon: null,
+      });
+      const fetchImpl = scriptedFetch([
+        cloudOk({ toolUse: [{ id: 'toolu_1', name: 'describe_library', input: {} }] }),
+        cloudOk({ text: 'One DJI file.' }),
+      ]);
+      const result = await assistant.converse({
+        library, db, userMessage: 'what cameras?', backend: 'cloud', apiKey: 'sk-test-key', fetchImpl,
+      });
+      check('a cloud tool_use block is executed exactly like an Ollama tool call',
+        result.toolLog.length === 1 && result.toolLog[0].name === 'describe_library' && result.toolLog[0].ranFor === 'real',
+        JSON.stringify(result.toolLog));
+      check('the follow-up reply after the tool call is returned', result.reply === 'One DJI file.');
+
+      // The second request's tool_result must reference the *same* tool_use id
+      // Anthropic assigned — a mismatched id is a real API error on their side,
+      // not a cosmetic detail.
+      const secondBody = fetchImpl.calls[1].body;
+      const toolResultBlock = secondBody.messages
+        .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+        .find((b) => b.type === 'tool_result');
+      check('the tool result is linked back to the exact tool_use id from Anthropic\'s own response',
+        toolResultBlock?.tool_use_id === 'toolu_1', JSON.stringify(toolResultBlock));
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      const fetchImpl = scriptedFetch([
+        cloudOk({ toolUse: [{ id: 'toolu_1', name: 'ask_user', input: { question: 'Which camera?', options: ['DJI', 'iPhone'] } }] }),
+      ]);
+      const result = await assistant.converse({
+        library, db, userMessage: 'sort my stuff', backend: 'cloud', apiKey: 'sk-test-key', fetchImpl,
+      });
+      check('ask_user via the cloud backend stops the loop with a question, exactly like the local backend',
+        result.reply === null && result.question?.question === 'Which camera?', JSON.stringify(result));
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      const unauthorized = scriptedFetch([{ ok: false, status: 401 }]);
+      let threw = null;
+      try {
+        await assistant.converse({
+          library, db, userMessage: 'hi', backend: 'cloud', apiKey: 'sk-bad-key', fetchImpl: unauthorized,
+        });
+      } catch (err) { threw = err; }
+      check('a 401 from the cloud API is reported as a refused key, not a bare status code',
+        threw?.message.toLowerCase().includes('refused'), threw?.message);
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      const badRequest = scriptedFetch([{
+        ok: false, status: 400, json: async () => ({ error: { message: 'max_tokens: field required' } }),
+      }]);
+      let threw = null;
+      try {
+        await assistant.converse({
+          library, db, userMessage: 'hi', backend: 'cloud', apiKey: 'sk-test-key', fetchImpl: badRequest,
+        });
+      } catch (err) { threw = err; }
+      check('the cloud API\'s own error message is surfaced, not just the bare status code',
+        threw?.message.includes('max_tokens: field required'), threw?.message);
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      const throwingFetch = async () => { throw new Error('ENOTFOUND'); };
+      let threw = null;
+      try {
+        await assistant.converse({
+          library, db, userMessage: 'hi', backend: 'cloud', apiKey: 'sk-test-key', fetchImpl: throwingFetch,
+        });
+      } catch (err) { threw = err; }
+      check('a network failure against the cloud host is reported clearly',
+        threw instanceof assistant.AssistantError && threw.message.includes('api.anthropic.com'), threw?.message);
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      const emptyBody = scriptedFetch([{ ok: true, json: async () => ({}) }]);
+      let threw = null;
+      try {
+        await assistant.converse({
+          library, db, userMessage: 'hi', backend: 'cloud', apiKey: 'sk-test-key', fetchImpl: emptyBody,
+        });
+      } catch (err) { threw = err; }
+      check('a cloud response with no content blocks is refused rather than crashing downstream',
+        threw instanceof assistant.AssistantError);
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const library = scratchLibrary();
+    const db = new IndexDb(path.join(library, '.lanshare', 'index.db'));
+    try {
+      let threw = null;
+      try { await assistant.converse({ library, db, userMessage: 'hi', backend: 'nope' }); } catch (err) { threw = err; }
+      check('an unknown backend name is refused clearly',
+        threw instanceof assistant.AssistantError && threw.message.includes('nope'), threw?.message);
+    } finally {
+      db.close();
+      rmSync(library, { recursive: true, force: true });
+    }
+  }
+
+  check('CLOUD_DISCLOSURE states plainly that file contents are never sent',
+    assistant.CLOUD_DISCLOSURE.toLowerCase().includes('never') && assistant.CLOUD_DISCLOSURE.toLowerCase().includes('content'));
 } catch (err) {
   fail++;
   console.log(`  FAIL  unexpected error during the test run -> ${err.stack || err.message}`);

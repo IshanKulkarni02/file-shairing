@@ -814,10 +814,15 @@ ipcMain.handle('auditLog:list', guarded((event, actionType) => ({
 
 // --- Phase O3: the assistant chat loop ---------------------------------
 
-ipcMain.handle('assistant:message', guarded(async (event, message, conversation) => {
+ipcMain.handle('assistant:message', guarded(async (event, message, conversation, backend) => {
   const priorConversation = Array.isArray(conversation) ? conversation : [];
   const memoryExamples = priorConversation.length
     ? [] : assistantMemoryLib.closestExamples(serverHandle?.indexDb, message);
+
+  const useCloud = backend === 'cloud';
+  if (useCloud && (!secretStore().available || !config.assistant?.cloudKey)) {
+    throw new assistantLib.AssistantError('No cloud API key is set up — add one first.');
+  }
 
   const result = await assistantLib.converse({
     library: libraryPath(),
@@ -825,8 +830,11 @@ ipcMain.handle('assistant:message', guarded(async (event, message, conversation)
     config,
     conversation: priorConversation,
     userMessage: message,
+    backend: useCloud ? 'cloud' : 'local',
     host: config.assistant?.host || assistantLib.DEFAULT_HOST,
     model: config.assistant?.model || assistantLib.DEFAULT_MODEL,
+    apiKey: useCloud ? secretStore().decrypt(config.assistant.cloudKey) : null,
+    cloudModel: config.assistant?.cloudModel || assistantLib.DEFAULT_CLOUD_MODEL,
     memoryExamples,
   });
 
@@ -843,7 +851,15 @@ ipcMain.handle('assistant:models', guarded(async () => {
   const installed = await nlRulesLib.listModels({ host });
   const selected = config.assistant?.model || assistantLib.DEFAULT_MODEL;
   return {
-    host, installed, selected, reachable: installed.length > 0, selectedInstalled: installed.includes(selected),
+    host,
+    installed,
+    selected,
+    reachable: installed.length > 0,
+    selectedInstalled: installed.includes(selected),
+    cloudAvailable: secretStore().available,
+    cloudConfigured: Boolean(config.assistant?.cloudKey),
+    cloudModel: config.assistant?.cloudModel || assistantLib.DEFAULT_CLOUD_MODEL,
+    cloudDisclosure: assistantLib.CLOUD_DISCLOSURE,
   };
 }));
 
@@ -852,6 +868,32 @@ ipcMain.handle('assistant:setModel', guarded((event, model) => {
   config.assistant = { ...(config.assistant || {}), model: model.trim() };
   configLib.save(config);
   return { selected: config.assistant.model };
+}));
+
+ipcMain.handle('assistant:setCloudKey', guarded((event, apiKey, cloudModel) => {
+  if (typeof apiKey !== 'string' || !apiKey.trim()) throw new assistantLib.AssistantError('Enter an API key');
+  if (!secretStore().available) {
+    throw new assistantLib.AssistantError(
+      'This machine has no secure place to remember the key (no OS keychain available), '
+      + 'so the cloud backend cannot be set up here.',
+    );
+  }
+  config.assistant = {
+    ...(config.assistant || {}),
+    cloudKey: secretStore().encrypt(apiKey.trim()),
+    cloudModel: (cloudModel && cloudModel.trim()) || config.assistant?.cloudModel || assistantLib.DEFAULT_CLOUD_MODEL,
+  };
+  configLib.save(config);
+  return {};
+}));
+
+ipcMain.handle('assistant:deleteCloudKey', guarded(() => {
+  if (config.assistant) {
+    const { cloudKey, ...rest } = config.assistant;
+    config.assistant = rest;
+    configLib.save(config);
+  }
+  return {};
 }));
 
 // --- importing from a camera, drone or card (Phase K) -----------------------

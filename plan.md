@@ -31,7 +31,7 @@ the internet without port forwarding.
 | L | Sorting rules, versioned in git | **Done** |
 | M | Instructions in plain language | **Done** (grammar/plumbing tested; real-model quality unverified here) |
 | N | Content search — the fuzzy cases | **Done** (CPU-verified end to end; GPU and packaged-install unverified here) |
-| O | The assistant — tools, graduated trust, trips | O1–O4 **Done** (O4 desktop-only); O5 not started |
+| O | The assistant — tools, graduated trust, trips | O1–O5 **Done** (O4/O5 desktop-only) |
 
 Phases A–G made one machine's library good and let machines reach each other.
 H–N are a different goal: **one searchable space across every device and
@@ -1752,6 +1752,61 @@ only the desktop app; a way to mark a chat correction as a correction, so
 `save_rule` call (see O3's own gap above) — the honest fix needs a "no, I
 meant this" affordance in the chat panel itself, not built here.
 
+## O5 — Cloud on demand (shipped, desktop only)
+
+A second backend for `lib/assistant.js`'s `converse()`, chosen per turn
+rather than globally: `backend: 'local'` (Ollama/Hermes 3, unchanged,
+still the default) or `backend: 'cloud'` (Anthropic's Messages API). The
+two backends translate to/from one shared internal message shape
+(`{role, content, toolCalls}`) at the edges only — `callLocalChat()` and
+`callCloudChat()` each own their own wire format (Ollama's OpenAI-style
+`tool_calls` vs. Anthropic's `tool_use`/`tool_result` content blocks,
+system prompt as a top-level field rather than a message) — so the
+tool-calling loop itself, trust gating, and memory retrieval built in
+O2/O3 are entirely backend-agnostic and needed no changes.
+
+The cloud API key is opt-in and stored nowhere near the repo or the
+config file in plaintext: it goes through the same OS-keychain-backed
+`secretsStore` (Electron's `safeStorage`) already built for
+`lib/central-index.js`'s passphrase, so it's desktop-only by the same
+constraint — a headless `node server.js` has no keychain to hold it in,
+and the routes/IPC both refuse cloud mode with a clear, honest reason
+rather than falling back to storing it some less-safe way.
+
+- **Routes** (`lib/server-app.js`) — `GET /api/assistant/models` now also
+  reports `cloudAvailable`/`cloudConfigured`/`cloudModel`/
+  `cloudDisclosure`; `POST`/`DELETE /api/assistant/cloud-key` set and
+  remove the encrypted key; `POST /api/assistant/message` accepts
+  `backend` and, for `'cloud'`, decrypts the stored key and passes it to
+  `converse()` — refusing before any network call if none is configured.
+- **Desktop IPC** (`desktop/main.js`/`preload.js`) — the same shape as the
+  routes, so the desktop app and a headless server behave identically
+  wherever the underlying capability (a keychain) actually differs, not
+  wherever it's merely inconvenient to check.
+- **The disclosure.** `CLOUD_DISCLOSURE` states plainly what a cloud call
+  sends — the instruction text plus whatever file names, camera fields,
+  dates and paths a tool call looks up while answering it, but never file
+  contents ("no tool here can read or return them") — and the desktop
+  Assistant panel renders that exact text inline the moment the "Think
+  harder (cloud)" checkbox is checked, not in a settings screen read once
+  and forgotten. The checkbox itself stays disabled until a key is
+  configured, so there's no path to an accidental cloud call.
+
+**Verified:** `lib/assistant.js`'s cloud path has 16 dedicated tests
+(request shape, header placement, tool_use/tool_result id linkage, 401
+and network-failure handling, `CLOUD_DISCLOSURE` content); the routes have
+15 more against a real (fake-secrets) server proving the full
+encrypt-store-decrypt round trip; `test/assistant-routes.mjs` covers the
+headless case where no keychain exists. `node --check` and
+`test/ui-contracts.mjs` pass on the desktop changes; full suite 1804/1804.
+**Not verified:** clicking the toggle in a live Electron window — same
+sandboxed-environment limitation as O4.
+
+**What O5 does not yet do:** cloud support in the web gallery (`public/`)
+— desktop only, for the same keychain-availability reason as the key
+storage itself; a per-message cost/token indicator; any cloud provider
+besides Anthropic.
+
 ## Order of work
 
 Each lands useful alone; none requires the next.
@@ -1773,7 +1828,11 @@ Each lands useful alone; none requires the next.
   conversation panel, plus the Trust and Ghost Mode review screens O1/O2
   built the routes for. The web gallery still has none of this — desktop
   only, for now.
-- **O5 — Cloud on demand.** Second backend, "think harder", the disclosure UI.
+- **O5 — Cloud on demand.** Shipped for the desktop app (see the section
+  above): a second, opt-in Anthropic backend chosen per turn, an
+  encrypted API key stored via the OS keychain, and the disclosure text
+  shown inline the moment cloud mode is selected. Desktop only, same
+  reason as O4.
 
 ## Concurrent writers: correctness first, realtime second
 

@@ -69,6 +69,28 @@ try {
   body = await res.json();
   check('an empty model name is refused', res.status === 400 && typeof body.error === 'string', JSON.stringify(body));
 
+  // --- the cloud backend, in this headless environment (no OS keychain) -----
+  // This is the honest common case: cloud-on-demand needs somewhere secure to
+  // keep the API key, which only the desktop app has (see
+  // test/assistant-cloud-routes.mjs for the case where one is available).
+
+  res = await admin('/api/assistant/models');
+  body = await res.json();
+  check('cloudAvailable is false without a real secrets store', body.cloudAvailable === false, JSON.stringify(body));
+  check('cloudConfigured is false — nothing could have been stored here', body.cloudConfigured === false);
+  check('the disclosure text is still present even when cloud is unavailable — no reason to hide what it would say',
+    typeof body.cloudDisclosure === 'string' && body.cloudDisclosure.toLowerCase().includes('never'));
+
+  res = await admin('/api/assistant/cloud-key', json({ apiKey: 'sk-ant-whatever' }));
+  body = await res.json();
+  check('setting a cloud key here is refused with a clear, honest reason',
+    res.status === 400 && body.error.toLowerCase().includes('keychain'), JSON.stringify(body));
+
+  res = await admin('/api/assistant/message', json({ message: 'hi', backend: 'cloud' }));
+  body = await res.json();
+  check('a cloud message is refused the same way, before ever touching the network',
+    res.status === 400 && body.error.toLowerCase().includes('no cloud api key'), JSON.stringify(body));
+
   // --- a conversation turn ------------------------------------------------
 
   res = await admin('/api/assistant/message', json({ message: 'How many files do I have?' }));

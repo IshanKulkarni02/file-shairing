@@ -144,9 +144,11 @@ contextBridge.exposeInMainWorld('lanshare', {
   },
 
   assistant: {
-    message: (message, conversation) => invoke('assistant:message', message, conversation),
+    message: (message, conversation, backend) => invoke('assistant:message', message, conversation, backend),
     models: () => invoke('assistant:models'),
     setModel: (model) => invoke('assistant:setModel', model),
+    setCloudKey: (apiKey, cloudModel) => invoke('assistant:setCloudKey', apiKey, cloudModel),
+    deleteCloudKey: () => invoke('assistant:deleteCloudKey'),
   },
 
   capture: {

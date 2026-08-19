@@ -557,14 +557,35 @@
 
       <p class="field__error" id="assistantError"></p>
 
+      <div id="assistantCloudDisclosure" class="panel__sub" hidden style="margin:.3rem 0;padding:.5rem;border:1px solid var(--border);border-radius:6px"></div>
+
       <div class="field-row" style="margin-top:.5rem">
         <input class="field__input" id="assistantInput" type="text" style="flex:1"
           placeholder="e.g. &quot;what cameras do I have?&quot; or &quot;sort my drone shots by month&quot;">
         <button class="btn btn--primary" id="assistantSendBtn">Send</button>
       </div>
-      <div class="field-row" style="margin-top:.4rem">
+      <div class="field-row" style="margin-top:.4rem;align-items:center">
+        <label class="field-row" id="assistantCloudToggleLabel" hidden style="align-items:center;gap:.35rem;margin:0">
+          <input type="checkbox" id="assistantCloudToggle">
+          <span>Think harder (cloud)</span>
+        </label>
         <button class="btn btn--ghost btn--sm" id="assistantNewConversationBtn">New conversation</button>
       </div>
+    </div>
+
+    <div class="card" id="assistantCloudCard" hidden>
+      <h3 style="font-size:.9rem;margin-bottom:.2rem">Cloud backend</h3>
+      <p class="panel__sub" id="assistantCloudNote" style="margin:0 0 .6rem"></p>
+      <div class="field-row" id="assistantCloudSetupRow">
+        <label class="sr-only" for="assistantCloudKeyInput">Cloud API key</label>
+        <input class="field__input" id="assistantCloudKeyInput" type="password" style="flex:1"
+          placeholder="sk-ant-...">
+        <button class="btn" id="assistantCloudSaveBtn">Save key</button>
+      </div>
+      <div class="field-row" id="assistantCloudConfiguredRow" hidden style="margin-top:.4rem">
+        <button class="btn btn--ghost btn--sm" id="assistantCloudRemoveBtn">Remove key</button>
+      </div>
+      <p class="field__error" id="assistantCloudError"></p>
     </div>
   </section>
 
