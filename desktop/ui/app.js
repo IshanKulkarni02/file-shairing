@@ -73,6 +73,8 @@ const panelLoaders = {
   library: () => loadLibrary(),
   sync: () => loadSync(),
   rules: () => loadRules(),
+  assistant: () => loadAssistant(),
+  automation: () => loadAutomation(),
   connections: () => loadConnections(),
   settings: () => loadSettings(),
 };
@@ -2007,6 +2009,305 @@ $('rulesDraftRunOnceBtn').addEventListener('click', async () => {
 });
 
 $('rulesDraftDiscardBtn').addEventListener('click', () => { $('rulesDraftResult').hidden = true; });
+
+// ---------------------------------------------------------------------------
+// Assistant (Phase O3/O4)
+// ---------------------------------------------------------------------------
+// `assistantConversation` is what converse() returned as `messages` last
+// turn — held here, not reloaded from anywhere, since the server is
+// deliberately stateless about chat history (see plan.md). Switching to
+// another panel and back keeps talking to the same conversation; only
+// "New conversation" resets it.
+
+let assistantConversation = [];
+let assistantBusy = false;
+
+async function loadAssistant() {
+  await loadAssistantModels().catch(() => {});
+}
+
+async function loadAssistantModels() {
+  const select = $('assistantModelSelect');
+  const note = $('assistantModelNote');
+  const result = await window.lanshare.assistant.models();
+  if (!result.ok) { note.textContent = result.error; return; }
+
+  select.textContent = '';
+  for (const name of result.installed) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    select.append(opt);
+  }
+
+  if (!result.reachable) {
+    const opt = document.createElement('option');
+    opt.value = result.selected;
+    opt.textContent = `${result.selected} (Ollama not reachable)`;
+    select.append(opt);
+    note.textContent = `Nothing is answering at ${result.host}. Start Ollama, then press Refresh.`;
+  } else if (!result.selectedInstalled) {
+    note.textContent = `"${result.selected}" is not installed — pick one of the ${result.installed.length} above, `
+      + `or run "ollama pull ${result.selected}" to download it.`;
+  } else {
+    note.textContent = `Talking to ${result.selected}.`;
+  }
+  select.value = result.selectedInstalled ? result.selected : (result.installed[0] || result.selected);
+}
+
+$('assistantModelSelect').addEventListener('change', async () => {
+  const result = await window.lanshare.assistant.setModel($('assistantModelSelect').value);
+  $('assistantModelNote').textContent = result.ok ? `Talking to ${result.selected}.` : result.error;
+});
+$('assistantModelRefreshBtn').addEventListener('click', () => loadAssistantModels());
+
+function appendChatBubble(role, text) {
+  const log = $('assistantLog');
+  const el = document.createElement('div');
+  el.className = `chat-msg chat-msg--${role}`;
+  el.textContent = text;
+  log.append(el);
+  log.scrollTop = log.scrollHeight;
+}
+
+/** A tool call, shown as a quiet log line — not a speech bubble — so "what exactly did it do" stays visible without reading like the assistant said it out loud. */
+function appendToolLogLine(entry) {
+  const log = $('assistantLog');
+  const el = document.createElement('div');
+  el.className = 'chat-msg chat-msg--tool';
+  let label;
+  if (entry.error) label = `${entry.name}: ${entry.error}`;
+  else if (entry.ranFor === 'preview') label = `${entry.name} — previewed only (trust: ${entry.trustLevel})`;
+  else label = `${entry.name} — ran`;
+  el.textContent = `\u{1F527} ${label}`;
+  log.append(el);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendAssistantMessage(text) {
+  if (!text.trim() || assistantBusy) return;
+  $('assistantError').textContent = '';
+  $('assistantError').classList.remove('is-shown');
+  $('assistantQuestionBox').hidden = true;
+  appendChatBubble('user', text);
+  $('assistantInput').value = '';
+
+  assistantBusy = true;
+  $('assistantSendBtn').disabled = true;
+  $('assistantSendBtn').textContent = 'Thinking…';
+  try {
+    const result = await window.lanshare.assistant.message(text, assistantConversation);
+    if (!result.ok) {
+      $('assistantError').textContent = result.error;
+      $('assistantError').classList.add('is-shown');
+      return;
+    }
+    assistantConversation = result.messages;
+    for (const entry of result.toolLog) appendToolLogLine(entry);
+
+    if (result.question) {
+      $('assistantQuestionText').textContent = result.question.question;
+      const optionsBox = $('assistantQuestionOptions');
+      optionsBox.textContent = '';
+      for (const option of result.question.options) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn--sm';
+        btn.textContent = option;
+        btn.addEventListener('click', () => sendAssistantMessage(option));
+        optionsBox.append(btn);
+      }
+      $('assistantQuestionBox').hidden = false;
+    } else if (result.reply) {
+      appendChatBubble('assistant', result.reply);
+    }
+  } finally {
+    assistantBusy = false;
+    $('assistantSendBtn').disabled = false;
+    $('assistantSendBtn').textContent = 'Send';
+  }
+}
+
+$('assistantSendBtn').addEventListener('click', () => sendAssistantMessage($('assistantInput').value));
+$('assistantInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendAssistantMessage($('assistantInput').value);
+  }
+});
+$('assistantNewConversationBtn').addEventListener('click', () => {
+  assistantConversation = [];
+  $('assistantLog').textContent = '';
+  $('assistantQuestionBox').hidden = true;
+  $('assistantError').textContent = '';
+  $('assistantError').classList.remove('is-shown');
+});
+
+// ---------------------------------------------------------------------------
+// Automation: trust levels and the Ghost Mode review queue (Phase O2/O4)
+// ---------------------------------------------------------------------------
+
+const TRUST_LABELS = { ask: 'Ask', ghost: 'Ghost', auto: 'Auto' };
+const ACTION_TYPE_LABELS = { trip_cluster: 'Trip clustering', camera_correction: 'Camera clock correction' };
+
+async function loadAutomation() {
+  await loadTrustList();
+  await loadGhostQueue();
+  await loadGhostApproved();
+  await loadAuditLog();
+}
+
+async function loadTrustList() {
+  const result = await window.lanshare.trust.list();
+  const container = $('trustList');
+  container.textContent = '';
+  if (!result.ok) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem"></p>';
+    container.querySelector('.empty-note').textContent = result.error;
+    return;
+  }
+
+  for (const entry of result.actionTypes) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions">
+        <select class="select trust-select"></select>
+      </div>`;
+    row.querySelector('.row__title').textContent = ACTION_TYPE_LABELS[entry.actionType] || entry.actionType;
+
+    let sub = '';
+    if (entry.eligibleFor === 'ghost') sub = `Eligible for Ghost — ${entry.evidence.consecutiveApprovals} approvals in a row.`;
+    else if (entry.eligibleFor === 'auto') sub = `Eligible for Auto — ${entry.evidence.ghostLogs} ghost-logged decisions.`;
+    row.querySelector('.row__sub').textContent = sub;
+
+    const select = row.querySelector('.trust-select');
+    for (const level of ['ask', 'ghost', 'auto']) {
+      const opt = document.createElement('option');
+      opt.value = level;
+      opt.textContent = TRUST_LABELS[level];
+      select.append(opt);
+    }
+    select.value = entry.level;
+    select.addEventListener('change', async () => {
+      select.disabled = true;
+      try {
+        const setResult = await window.lanshare.trust.set(entry.actionType, select.value);
+        if (!setResult.ok) { alert(setResult.error); select.value = entry.level; return; }
+        await loadTrustList();
+      } finally {
+        select.disabled = false;
+      }
+    });
+    container.append(row);
+  }
+}
+
+async function loadGhostQueue() {
+  const result = await window.lanshare.patternEngine.proposals('pending');
+  const container = $('ghostQueueList');
+  container.textContent = '';
+  if (!result.ok || !result.proposals?.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">Nothing waiting for review.</p>';
+    return;
+  }
+
+  for (const proposal of result.proposals) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions">
+        <button class="btn btn--sm btn--primary">Approve</button>
+        <button class="btn btn--sm btn--ghost">Reject</button>
+      </div>`;
+    row.querySelector('.row__title').textContent = proposal.summary;
+    row.querySelector('.row__sub').textContent = proposal.kind === 'trip_cluster' ? 'Trip' : 'Camera correction';
+
+    row.querySelector('.btn--primary').addEventListener('click', async () => {
+      const r = await window.lanshare.patternEngine.approve(proposal.id);
+      if (!r.ok) { alert(r.error); return; }
+      await loadAutomation();
+    });
+    row.querySelector('.btn--ghost').addEventListener('click', async () => {
+      const r = await window.lanshare.patternEngine.reject(proposal.id);
+      if (!r.ok) { alert(r.error); return; }
+      await loadGhostQueue();
+    });
+    container.append(row);
+  }
+}
+
+async function loadGhostApproved() {
+  const result = await window.lanshare.patternEngine.proposals('approved');
+  const container = $('ghostApprovedList');
+  container.textContent = '';
+  if (!result.ok || !result.proposals?.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">Nothing approved yet.</p>';
+    return;
+  }
+
+  for (const proposal of result.proposals.slice(0, 10)) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="row__main">
+        <div class="row__title"></div>
+        <div class="row__sub"></div>
+      </div>
+      <div class="row__actions">
+        <button class="btn btn--sm btn--danger">Revert</button>
+      </div>`;
+    row.querySelector('.row__title').textContent = proposal.summary;
+    row.querySelector('.row__sub').textContent = proposal.decidedAt ? new Date(proposal.decidedAt).toLocaleString() : '';
+
+    row.querySelector('.btn--danger').addEventListener('click', async () => {
+      if (!confirm('Undo this? Its trust level will drop straight back to Ask.')) return;
+      const r = await window.lanshare.patternEngine.revert(proposal.id);
+      if (!r.ok) { alert(r.error); return; }
+      await loadAutomation();
+    });
+    container.append(row);
+  }
+}
+
+async function loadAuditLog() {
+  const result = await window.lanshare.auditLog.list();
+  const container = $('auditLogList');
+  container.textContent = '';
+  if (!result.ok || !result.entries?.length) {
+    container.innerHTML = '<p class="empty-note" style="padding:1rem">Nothing logged yet.</p>';
+    return;
+  }
+
+  for (const entry of result.entries.slice(0, 20)) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = '<div class="row__main"><div class="row__title"></div><div class="row__sub"></div></div>';
+    row.querySelector('.row__title').textContent = `${entry.decision} — ${ACTION_TYPE_LABELS[entry.actionType] || entry.actionType}`;
+    row.querySelector('.row__sub').textContent = new Date(entry.createdAt).toLocaleString();
+    container.append(row);
+  }
+}
+
+$('ghostScanBtn').addEventListener('click', async () => {
+  $('ghostScanBtn').disabled = true;
+  $('ghostScanNote').textContent = 'Scanning…';
+  try {
+    const result = await window.lanshare.patternEngine.scan();
+    if (!result.ok) { $('ghostScanNote').textContent = result.error; return; }
+    $('ghostScanNote').textContent = `Found ${result.proposed.length} new proposal(s), auto-attached ${result.autoAttached.length} file(s).`;
+    await loadAutomation();
+  } finally {
+    $('ghostScanBtn').disabled = false;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // First-run setup

@@ -64,6 +64,10 @@ const sortRulesLib = require('../lib/sort-rules');
 const sortEngineLib = require('../lib/sort-engine');
 const nlRulesLib = require('../lib/nl-rules');
 const indexDbLib = require('../lib/index-db');
+const patternDiscoveryLib = require('../lib/pattern-discovery');
+const trustLib = require('../lib/trust');
+const assistantLib = require('../lib/assistant');
+const assistantMemoryLib = require('../lib/assistant-memory');
 
 // A config.json that cannot be parsed would otherwise take the whole app
 // down at module load — before any window exists — leaving a double-clicked
@@ -391,7 +395,10 @@ function guarded(fn) {
         || err instanceof importLib.ImportError
         || err instanceof sortRulesLib.SortRulesError
         || err instanceof sortEngineLib.SortEngineError
-        || err instanceof nlRulesLib.NlRulesError) {
+        || err instanceof nlRulesLib.NlRulesError
+        || err instanceof patternDiscoveryLib.PatternDiscoveryError
+        || err instanceof trustLib.TrustError
+        || err instanceof assistantLib.AssistantError) {
         return { ok: false, error: err.message };
       }
       throw err;
@@ -758,6 +765,93 @@ ipcMain.handle('rules:runOnce', guarded(async (event, text) => {
   const batch = await sortEngineLib.apply({ library: libraryPath(), moves: planned.moves });
   if (serverHandle?.indexDb) await indexerLib.scanLibrary(libraryPath(), serverHandle.indexDb);
   return { batch };
+}));
+
+// --- Phase O1/O2: Ghost Mode's review queue and graduated trust -------------
+
+ipcMain.handle('patternEngine:scan', guarded(async () => {
+  const result = await patternDiscoveryLib.runDiscoveryPass({
+    library: libraryPath(), db: serverHandle?.indexDb, config,
+  });
+  return { proposed: result.proposed.map((p) => p.proposal), autoAttached: result.autoAttached };
+}));
+
+ipcMain.handle('patternEngine:proposals', guarded((event, status) => ({
+  proposals: serverHandle?.indexDb.listProposals(status || 'pending') || [],
+})));
+
+ipcMain.handle('patternEngine:approve', guarded((event, id) => ({
+  proposal: patternDiscoveryLib.approveProposal(libraryPath(), serverHandle?.indexDb, id),
+})));
+
+ipcMain.handle('patternEngine:reject', guarded((event, id) => ({
+  proposal: patternDiscoveryLib.rejectProposal(serverHandle?.indexDb, id),
+})));
+
+ipcMain.handle('patternEngine:revert', guarded((event, id) => {
+  const proposal = patternDiscoveryLib.revertProposal(libraryPath(), serverHandle?.indexDb, id);
+  Object.assign(config, configLib.load()); // revertProposal demotes trust, writing config.json directly
+  return { proposal };
+}));
+
+ipcMain.handle('trust:list', guarded(() => ({
+  actionTypes: trustLib.KNOWN_ACTION_TYPES.map((actionType) => ({
+    actionType,
+    level: trustLib.getTrustLevel(config, actionType),
+    ...trustLib.promotionEligibility(serverHandle?.indexDb, config, actionType),
+  })),
+})));
+
+ipcMain.handle('trust:set', guarded((event, actionType, level) => {
+  trustLib.setTrustLevel(actionType, level);
+  Object.assign(config, configLib.load());
+  return { actionType, level: trustLib.getTrustLevel(config, actionType) };
+}));
+
+ipcMain.handle('auditLog:list', guarded((event, actionType) => ({
+  entries: serverHandle?.indexDb.listAuditLog({ actionType: actionType || null }) || [],
+})));
+
+// --- Phase O3: the assistant chat loop ---------------------------------
+
+ipcMain.handle('assistant:message', guarded(async (event, message, conversation) => {
+  const priorConversation = Array.isArray(conversation) ? conversation : [];
+  const memoryExamples = priorConversation.length
+    ? [] : assistantMemoryLib.closestExamples(serverHandle?.indexDb, message);
+
+  const result = await assistantLib.converse({
+    library: libraryPath(),
+    db: serverHandle?.indexDb,
+    config,
+    conversation: priorConversation,
+    userMessage: message,
+    host: config.assistant?.host || assistantLib.DEFAULT_HOST,
+    model: config.assistant?.model || assistantLib.DEFAULT_MODEL,
+    memoryExamples,
+  });
+
+  const savedCall = result.toolLog.find((t) => t.name === 'save_rule' && t.ranFor === 'real' && t.result?.saved);
+  if (savedCall?.args?.text) {
+    serverHandle?.indexDb.rememberInstruction({ instruction: message, ruleText: savedCall.args.text });
+  }
+
+  return result;
+}));
+
+ipcMain.handle('assistant:models', guarded(async () => {
+  const host = config.assistant?.host || assistantLib.DEFAULT_HOST;
+  const installed = await nlRulesLib.listModels({ host });
+  const selected = config.assistant?.model || assistantLib.DEFAULT_MODEL;
+  return {
+    host, installed, selected, reachable: installed.length > 0, selectedInstalled: installed.includes(selected),
+  };
+}));
+
+ipcMain.handle('assistant:setModel', guarded((event, model) => {
+  if (typeof model !== 'string' || !model.trim()) throw new assistantLib.AssistantError('Pick a model');
+  config.assistant = { ...(config.assistant || {}), model: model.trim() };
+  configLib.save(config);
+  return { selected: config.assistant.model };
 }));
 
 // --- importing from a camera, drone or card (Phase K) -----------------------

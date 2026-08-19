@@ -462,3 +462,47 @@ button { font: inherit; color: inherit; cursor: pointer; border: none; backgroun
   color: var(--text-soft);
   opacity: .8;
 }
+
+/* -------------------------------------------------------------------------
+   Assistant chat log
+   ------------------------------------------------------------------------- */
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: .25rem;
+}
+.chat-msg {
+  max-width: 80%;
+  padding: .5rem .75rem;
+  border-radius: var(--r-sm);
+  font-size: .8125rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-msg--user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+}
+.chat-msg--assistant {
+  align-self: flex-start;
+  background: var(--surface-2);
+  color: var(--text);
+}
+/* A tool call is neither side of the conversation — a small, quiet log
+   line, not a speech bubble, so "what exactly did it do" stays visible
+   without reading like the assistant said it out loud. */
+.chat-msg--tool {
+  align-self: flex-start;
+  max-width: 95%;
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--text-soft);
+  font-size: .6875rem;
+  font-family: ui-monospace, Consolas, monospace;
+}

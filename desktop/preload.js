@@ -126,6 +126,29 @@ contextBridge.exposeInMainWorld('lanshare', {
     setModel: (model) => invoke('rules:setModel', model),
   },
 
+  patternEngine: {
+    scan: () => invoke('patternEngine:scan'),
+    proposals: (status) => invoke('patternEngine:proposals', status),
+    approve: (id) => invoke('patternEngine:approve', id),
+    reject: (id) => invoke('patternEngine:reject', id),
+    revert: (id) => invoke('patternEngine:revert', id),
+  },
+
+  trust: {
+    list: () => invoke('trust:list'),
+    set: (actionType, level) => invoke('trust:set', actionType, level),
+  },
+
+  auditLog: {
+    list: (actionType) => invoke('auditLog:list', actionType),
+  },
+
+  assistant: {
+    message: (message, conversation) => invoke('assistant:message', message, conversation),
+    models: () => invoke('assistant:models'),
+    setModel: (model) => invoke('assistant:setModel', model),
+  },
+
   capture: {
     pending: () => invoke('capture:pending'),
     importNow: () => invoke('capture:importNow'),
